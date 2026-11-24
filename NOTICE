@@ -1,0 +1,15 @@
+FrishLuna
+Copyright (c) 2026 FrishLuna Authors
+
+本软件依据 MIT 许可证（见 LICENSE）授权。
+
+声明：
+1. FrishLuna 是独立的第三方互操作性研究项目，与腾讯公司及 QQ
+   无任何隶属、合作、授权或背书关系。"QQ"、"QQNT"、"腾讯" 等名称
+   仅用于描述兼容对象，均为其各自所有者的商标，本项目不作商标性使用。
+2. 本项目为零 npm 运行时依赖的原生实现，未包含任何第三方项目的代码；
+   OneBot v11 为公开规范（https://github.com/botuniverse/onebot-11）。
+3. 运行时会按功能需要访问以下腾讯业务域名（互操作调用，非素材引用）：
+   qun.qq.com / qzone.qq.com / qfile.qq.com / multimedia.nt.qq.com.cn /
+   p.qlogo.cn / q1.qlogo.cn。
+4. 使用本软件的一切风险由使用者自行承担，详见 docs/EULA.md。
