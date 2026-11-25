@@ -140,8 +140,7 @@
 
   async function getJSON (url) {
     try {
-      const sep = url.includes('?') ? '&' : '?'
-      const res = await fetch(url + sep + 'token=' + encodeURIComponent(token()))
+      const res = await fetch(url, { headers: { 'x-fl-token': token() } })
       if (res.status === 401) { logout(); return null }
       if (res.status === 428) { location.href = '/login.html'; return null }
       return await res.json()
@@ -968,6 +967,70 @@
     })
   }
 
+  /** 参数区渲染：按功能目录里的 params 出控件。
+      kind=kind 渲染成群聊/好友切换（写回 store.fnKind 并重渲，联动 when 过滤）；
+      group/friend 渲染成可搜索下拉（复用群目录 / 好友目录）；
+      其余按 onoff/num/json/textarea/text 出对应控件。 */
+  function renderFnParams (tab) {
+    const box = document.getElementById('fn-' + tab + '-params')
+    if (!box) return
+    const fn = store.fnPick && store.fnPick[tab]
+    if (!fn) {
+      box.innerHTML = '<div class="hint" style="grid-column:1/-1">先在上方选一个功能，参数会出现在这里</div>'
+      return
+    }
+    const kindVal = store.fnKind[tab] || 'group'
+    const rows = []
+    if (fn.params.some((p) => p.kind === 'kind')) {
+      rows.push('<label class="wide"><span>对象类型</span><div class="seg" data-kindseg>' +
+        '<button type="button" data-kv="group"' + (kindVal === 'group' ? ' class="active"' : '') + '>群聊</button>' +
+        '<button type="button" data-kv="private"' + (kindVal === 'private' ? ' class="active"' : '') + '>好友</button>' +
+        '</div></label>')
+    }
+    for (const p of fn.params) {
+      if (p.kind === 'kind') continue
+      if (p.when && p.when !== kindVal) continue
+      const id = 'fn-' + tab + '-' + p.key
+      const mark = p.req ? '（必填）' : ''
+      if (p.kind === 'group' || p.kind === 'friend') {
+        rows.push('<label' + (p.wide ? ' class="wide"' : '') + '><span>' + esc(p.label) + mark + '</span>' +
+          '<input type="text" id="' + id + '" class="lab-id fn-input" placeholder="' + esc(p.ph || '可搜索，也可直接填') + '" autocomplete="off" spellcheck="false"></label>')
+      } else if (p.kind === 'onoff') {
+        rows.push('<label><span>' + esc(p.label) + '</span><select id="' + id + '">' +
+          '<option value="true"' + (String(p.def) === 'true' ? ' selected' : '') + '>开</option>' +
+          '<option value="false"' + (String(p.def) !== 'true' ? ' selected' : '') + '>关</option>' +
+          '</select></label>')
+      } else if (p.kind === 'num') {
+        rows.push('<label><span>' + esc(p.label) + mark + '</span><input type="number" id="' + id + '" value="' + esc(p.def == null ? '' : p.def) + '"></label>')
+      } else if (p.kind === 'json' || p.kind === 'textarea') {
+        rows.push('<label class="wide"><span>' + esc(p.label) + mark + '</span><textarea id="' + id + '" rows="4" placeholder="' + esc(p.ph || '') + '">' + esc(p.def == null ? '' : p.def) + '</textarea></label>')
+      } else {
+        rows.push('<label' + (p.wide ? ' class="wide"' : '') + '><span>' + esc(p.label) + mark + '</span><input type="text" id="' + id + '" value="' + esc(p.def == null ? '' : p.def) + '" placeholder="' + esc(p.ph || '') + '"></label>')
+      }
+    }
+    box.innerHTML = rows.join('')
+    /* 群聊/好友切换：写回 kind 并重渲（when 条件参数跟着显隐） */
+    box.querySelectorAll('[data-kindseg] button').forEach((b) => {
+      b.addEventListener('click', () => {
+        if (store.fnKind[tab] === b.dataset.kv) return
+        store.fnKind[tab] = b.dataset.kv
+        renderFnParams(tab)
+      })
+    })
+    /* 群号 / 好友 QQ：接上目录下拉，读不到数据也能手填 */
+    for (const p of fn.params) {
+      const el = document.getElementById('fn-' + tab + '-' + p.key)
+      if (!el) continue
+      if (p.kind === 'group') attachGroupPicker(el)
+      else if (p.kind === 'friend') attachFriendPicker(el)
+    }
+  }
+
+  /** 取某条参数的控件（runFn 按这个约定读值） */
+  function fnEl (tab, key) {
+    return document.getElementById('fn-' + tab + '-' + key)
+  }
+
   /** 功能选择下拉：函数名 + 淡色中文描述 + 类别标签，可搜索 */
   function attachFnPicker (tab) {
     const input = document.getElementById('fn-' + tab)
@@ -1504,27 +1567,6 @@
     $('#pref-font').value = p.termFont || 12.5
     $('#pref-font-val').textContent = (p.termFont || 12.5) + 'px'
     if (p.accent) $('#pref-accent-custom').value = p.accent
-    if (store.tokenFile && $('#tk-file')) $('#tk-file').textContent = store.tokenFile
-  }
-
-  /* 令牌强度标签：服务端 reset/setup 会把 strength 带回来，这里只负责显示 */
-  const TK_LEVEL_DESC = {
-    low: '字母 + 数字',
-    medium: '大写 + 小写 + 数字',
-    high: '大写 + 小写 + 数字 + 符号'
-  }
-
-  function renderTokenStrength (st) {
-    const el = $('#tk-strength')
-    if (!el) return
-    if (!st || !st.level || !st.label) {
-      el.hidden = true
-      el.textContent = ''
-      return
-    }
-    el.hidden = false
-    el.dataset.level = st.level
-    el.textContent = `强度 ${st.label} · ${TK_LEVEL_DESC[st.level] || ''}`
   }
 
   function initPrefs () {
@@ -1552,26 +1594,6 @@
       $('#pref-font-val').textContent = v + 'px'
       document.documentElement.style.setProperty('--term-font', v + 'px')
       savePrefs({ termFont: v })
-    })
-
-    $('#tk-copy').addEventListener('click', async () => {
-      const t = token()
-      if (!t) { toast('手上没有令牌，去登录页重新输入', 'error'); return }
-      try { await navigator.clipboard.writeText(t); toast('完整令牌已复制', 'ok') } catch { toast('复制失败', 'error') }
-    })
-    $('#tk-reset').addEventListener('click', async () => {
-      if (!confirm('重置后旧令牌立刻失效，所有浏览器都要用新令牌重新进入。继续？')) return
-      const r = await post('/api/auth/token/reset', {})
-      if (!r || !r.ok) { toast('重置失败', 'error'); return }
-      sessionStorage.setItem(TOKEN_KEY, r.token)
-      $('#tk-reveal').hidden = false
-      $('#tk-value').textContent = r.token
-      renderTokenStrength(r.strength)
-      syncPrefsUI()
-      toast('令牌已重置', 'ok')
-    })
-    $('#tk-logout').addEventListener('click', () => {
-      logout()
     })
   }
 
@@ -1878,8 +1900,14 @@
     })
   }
 
-  function connectStream () {
-    const es = new EventSource('/api/stream?token=' + encodeURIComponent(token()))
+  async function connectStream () {
+    /* EventSource 没法带授权头：先换一张 30 秒有效的一次性票据，URL 里不再放真令牌 */
+    let q = 'token=' + encodeURIComponent(token())
+    try {
+      const r = await post('/api/stream/ticket', {})
+      if (r && r.ok && r.ticket) q = 'ticket=' + encodeURIComponent(r.ticket)
+    } catch {}
+    const es = new EventSource('/api/stream?' + q)
 
     es.addEventListener('log', (e) => {
       try { appendLog(JSON.parse(e.data)) } catch {}
@@ -1921,15 +1949,6 @@
   }
 
   async function boot () {
-    // URL 带 ?token= → 直接当本次会话的令牌用（从控制台复制的链接）
-    const qToken = (new URLSearchParams(location.search).get('token') || '').trim()
-    if (qToken) {
-      sessionStorage.setItem(TOKEN_KEY, qToken)
-      const u = new URL(location.href)
-      u.searchParams.delete('token')
-      history.replaceState(null, '', u.pathname + u.search + u.hash)
-    }
-
     let auth = null
     try {
       const res = await fetch('/api/auth/status', { headers: { 'x-fl-token': token() } })
@@ -1938,7 +1957,6 @@
     if (!auth) { location.href = '/login.html'; return }
     if (!auth.authed) { logout(); return }
     store.authRequired = true
-    store.tokenFile = auth.tokenFile || ''
 
     initTheme()
     applyPrefs()

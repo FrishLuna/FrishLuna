@@ -298,7 +298,13 @@ async function receiptViaHistory (groupId, md5, maxTries) {
 async function handleAction (action, params, echo) {
   const st = kernel.status()
   const base = (status, retcode, data, message) => ({ status, retcode, data, message, echo })
-  /* 本地运维通道（仅绑定 127.0.0.1，供面板令牌更换期间使用） */
+  /* 开发直通：默认关闭。确实要临时 eval 时，用 FL_DEV_EVAL=1 启动面板再开；
+     非浏览器客户端没有 Origin，靠下面的跨站拦截挡住网页调用 */
+  if (action === 'fl_eval' || action === 'fl_status') {
+    if (process.env.FL_DEV_EVAL !== '1') {
+      return base('failed', 1403, null, '调试通道已关闭（需要时用 FL_DEV_EVAL=1 启动）')
+    }
+  }
   if (action === 'fl_eval') {
     const r = await kernel.call('dev_eval', { js: String(params.js || '') }, 30000)
     return base(r.ok ? 'ok' : 'failed', r.ok ? 0 : 1500, r.ret ?? null, r.ok ? '' : String(r.err || r.msg || ''))
@@ -923,6 +929,13 @@ function authOk (req, url, entryToken) {
   return false
 }
 
+/** 浏览器发起的跨站请求一律拒：本机网页以外来的 Origin 不可能是合法客户端 */
+function crossSite (req) {
+  const origin = String(req.headers.origin || '').trim()
+  if (!origin) return false
+  return !/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i.test(origin)
+}
+
 function readBody (req, limit = 1 << 20) {
   return new Promise((resolve, reject) => {
     let size = 0
@@ -940,6 +953,9 @@ function readBody (req, limit = 1 << 20) {
 function upgradeHandler (entry) {
   const handler = function (req, sock, head) {
     const url = new URL(req.url, 'http://localhost')
+    if (crossSite(req)) {
+      sock.write('HTTP/1.1 403 Forbidden\r\n\r\n'); sock.destroy(); return
+    }
     if (!authOk(req, url, entry && entry.token)) {
       sock.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); sock.destroy(); return
     }
@@ -1252,6 +1268,7 @@ function apiRequestHandler (entry) {
       res.end(JSON.stringify({ status: 'failed', retcode, data: null, message: msg }))
     }
     if (req.method !== 'POST') return fail(405, 1405, '仅支持 POST')
+    if (crossSite(req)) return fail(403, 1403, '拒绝跨站请求')
     if (!authOk(req, url, entry && entry.token)) return fail(401, 1403, '鉴权失败')
 
     /* action 三个来源，按 OneBot 11 的惯例依次兜底：

@@ -651,6 +651,9 @@ async function probe () {
 let ACTUAL_PORT = 5701
 /* 群号下拉的缓存：群列表变动很慢，60 秒内不重复问内核 */
 const groupsCache = { at: 0, items: [] }
+/* 登录失败计数：连错 5 次锁 30 秒 */
+let loginFails = 0
+let loginLockUntil = 0
 
 function createServer () {
   return http.createServer(async (req, res) => {
@@ -665,7 +668,16 @@ function createServer () {
 
     // 鉴权：除 /api/auth/* 外全部 API 需要访问令牌
     if (p.startsWith('/api/') && !p.startsWith('/api/auth/')) {
-      if (!auth.authed(req, url)) return json(res, 401, { ok: false, error: 'unauthorized' })
+      /* /api/stream 例外：EventSource 带不了授权头，允许用一次性的短时票据换连接 */
+      let ok = false
+      if (p === '/api/stream') {
+        let ticket = ''
+        try { ticket = new URL(url, 'http://127.0.0.1').searchParams.get('ticket') || '' } catch {}
+        ok = ticket ? auth.consumeStreamTicket(ticket) : auth.authed(req, url)
+      } else {
+        ok = auth.authed(req, url)
+      }
+      if (!ok) return json(res, 401, { ok: false, error: 'unauthorized' })
       /* 首次运行还没设置令牌：除了 auth 接口，一律挡住，逼回设置流程 */
       if (auth.isBootstrap()) return json(res, 428, { ok: false, error: 'setup-required' })
     }
@@ -675,17 +687,24 @@ function createServer () {
       return json(res, 200, {
         required: true,
         authed: auth.authed(req, url),
-        bootstrap: auth.isBootstrap(),
-        tokenFile: auth.AUTH_FILE
+        bootstrap: auth.isBootstrap()
       })
     }
     if (p === '/api/auth/login' && method === 'POST') {
+      /* 连错 5 次锁 30 秒：本机也有别的进程，挡一下暴力猜令牌 */
+      const now = Date.now()
+      if (now < loginLockUntil) {
+        return json(res, 429, { ok: false, msg: `尝试太频繁，${Math.ceil((loginLockUntil - now) / 1000)} 秒后再试` })
+      }
       const body = await readBody(req)
       const r = auth.login(body && body.token)
       if (!r.ok) {
+        loginFails += 1
+        if (loginFails >= 5) { loginLockUntil = Date.now() + 30 * 1000; loginFails = 0 }
         bus.warn('auth', '令牌验证失败（来自浏览器）')
         return json(res, 401, r)
       }
+      loginFails = 0
       if (r.setupRequired) {
         bus.ok('auth', '初始令牌验证通过，进入令牌设置')
         return json(res, 200, r)
@@ -700,14 +719,9 @@ function createServer () {
       bus.ok('auth', '访问令牌已设置（只存盐+哈希，不回显）')
       return json(res, 200, { ok: true, token: r.token, strength: r.strength })
     }
-    if (p === '/api/auth/token/reset' && method === 'POST') {
-      /* /api/auth/* 整段在鉴权门之外（登录、设置、状态必须免鉴权），
-         所以这里必须自己补一道：否则本机任意进程 / 任意网页都能把令牌重置掉。 */
-      if (!auth.authed(req, url)) return json(res, 401, { ok: false, error: 'unauthorized' })
-      const r = auth.resetToken()
-      /* 日志不留令牌：明文只在本次响应体里出现一次 */
-      bus.warn('auth', '访问令牌已重置（新令牌只在本次响应里出现一次）')
-      return json(res, 200, { ok: true, token: r.token, strength: r.strength })
+    if (p === '/api/stream/ticket' && method === 'POST') {
+      /* 换一次性票据：30 秒有效、只能用一次，EventSource 的 URL 里就不必写真令牌 */
+      return json(res, 200, { ok: true, ticket: auth.issueStreamTicket() })
     }
 
     if (p === '/api/stream') {
@@ -1196,8 +1210,7 @@ function printBanner (url, cfg, boot) {
       ? '   初始令牌只打印这一次：登录后立刻设置你自己的令牌，它即刻作废'
       : boot
         ? '   初始令牌已生成但输出被重定向：双击 app\\前台运行.cmd 重看一次'
-        : '   令牌不可回显：忘了就删掉 .env 里 FL_AUTH_* 那几行再重启',
-    '   换令牌：面板设置 → 访问令牌 → 重置（新令牌只显示一次）',
+        : '   令牌不可回显：忘了就删掉 .env 里 FL_AUTH_* 那几行再重启，会重新生成初始令牌',
     ''
   ].join('\n')
   console.log(out)

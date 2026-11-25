@@ -467,27 +467,6 @@
           </div>
         </div>
 
-        <div class="card">
-          <div class="card-head">
-            <h2>访问令牌</h2>
-            <span class="hint" id="tk-hint">每次进入面板都要用它</span>
-          </div>
-          <dl class="kv">
-            <div><dt>存放位置</dt><dd id="tk-file" class="mono small">—</dd></div>
-          </dl>
-          <div class="tk-foot">
-            <button class="btn" type="button" id="tk-copy">复制完整令牌</button>
-            <button class="btn" type="button" id="tk-reset">重置令牌</button>
-            <button class="btn danger" type="button" id="tk-logout">退出登录</button>
-            <span class="muted small" id="tk-msg"></span>
-          </div>
-          <div class="tk-reveal" id="tk-reveal" hidden>
-            <span class="muted small">新令牌（只显示这一次，关掉页面就再也看不到）</span>
-            <code id="tk-value"></code>
-            <span class="tk-strength" id="tk-strength" hidden></span>
-          </div>
-          <p class="muted small">令牌只保存盐和哈希，无法回显。重置后旧令牌立刻失效，所有浏览器都要用新令牌重新进入；忘了只能重置或删掉 .env 里的 FL_AUTH_* 再重启。</p>
-        </div>
       </section>
 
     </div>

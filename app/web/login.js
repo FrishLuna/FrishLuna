@@ -199,13 +199,6 @@
   ;(async () => {
     // 旧版本会把令牌留在 localStorage，这里统一清掉，不再本机持久化
     try { localStorage.removeItem(TOKEN_KEY) } catch {}
-    const q = (new URLSearchParams(location.search).get('token') || '').trim()
-    if (q) {
-      sessionStorage.setItem(TOKEN_KEY, q)
-      history.replaceState(null, '', location.pathname)
-      location.replace('/')
-      return
-    }
     const saved = sessionStorage.getItem(TOKEN_KEY) || ''
     if (saved) {
       try {

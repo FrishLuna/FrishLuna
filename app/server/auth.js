@@ -4,9 +4,6 @@ import path from 'node:path'
 import { DATA_DIR } from './config.js'
 import * as store from './auth-store.js'
 
-/** 令牌存储文件（.env）—— 面板设置里展示的就是这个路径 */
-export const AUTH_FILE = store.envPath
-
 /** 旧版明文凭据：迁移后删除，避免同一份令牌以明文长期驻留 */
 const LEGACY_FILE = path.join(DATA_DIR, 'auth.json')
 
@@ -233,16 +230,29 @@ export function setup (ticket, token) {
   return { ok: true, token: t, strength: st }
 }
 
-/** 重置令牌：新盐 + 新哈希，明文只在这一次响应里出现 */
-export function resetToken () {
-  const token = makeToken()
-  store.saveToken(token, { firstRun: false })
-  tickets.clear()
-  issued.add(token)
-  return { ok: true, token, strength: tokenStrength(token) }
-}
-
-/** 令牌存储的描述信息（给设置页展示，不含任何密文） */
+/** 令牌存储的描述信息（不含任何密文） */
 export function storageInfo () {
   return Object.assign(store.describe(), { firstRun: store.isFirstRun() })
+}
+
+/* ---------- SSE 一次性票据 ----------
+   EventSource 没法带授权头，以前把真令牌拼在连接 URL 里；
+   改成先换一张 30 秒有效、只能用一次的短时票据，URL 里不再出现真令牌 */
+const STREAM_TICKET_TTL = 30 * 1000
+const streamTickets = new Map()
+
+export function issueStreamTicket () {
+  const now = Date.now()
+  for (const [k, exp] of streamTickets) if (exp <= now) streamTickets.delete(k)
+  const t = crypto.randomBytes(16).toString('hex')
+  streamTickets.set(t, now + STREAM_TICKET_TTL)
+  return t
+}
+
+export function consumeStreamTicket (t) {
+  const k = String(t || '').trim()
+  const exp = streamTickets.get(k)
+  if (!exp || exp <= Date.now()) return false
+  streamTickets.delete(k)
+  return true
 }
