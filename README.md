@@ -16,6 +16,7 @@
   <img src="https://img.shields.io/badge/runtime%20deps-0-4fd1a5.svg" alt="Zero runtime dependencies">
   <img src="https://img.shields.io/badge/protocol-OneBot%20v11-a78bfa.svg" alt="OneBot v11">
   <img src="https://img.shields.io/badge/listen-127.0.0.1%20only-8b93a7.svg" alt="Local only">
+  <a href="https://github.com/FrishLuna/FrishLuna/issues"><img src="https://img.shields.io/badge/PRs%20%26%20Issues-welcome-ff7ab6.svg" alt="PRs and Issues welcome"></a>
 </p>
 
 ---
@@ -50,6 +51,7 @@ FrishLuna 给正在运行的 QQNT 客户端做一台"旁挂式"控制台：不�
 - [实现边界](#实现边界)
 - [已知限制](#已知限制)
 - [常见问题](#常见问题)
+- [参与贡献](#参与贡献)
 - [致谢与许可](#致谢与许可)
 
 ## 能做什么
@@ -259,6 +261,33 @@ injector/                      inject.py · launch.py · 权限探测
 tools/                         构建、自检、离线验收（selftest / protocol-selftest）
 docs/EULA.md                   可接受使用条款
 ```
+
+## 参与贡献
+
+项目刚起步，坦白讲：**坑很多，很多路径只有作者自己的机器上跑过**。QQ 客户端版本一换、
+某个接口在别人的网络或账号类型下不灵，都是常事。所以任何形式的反馈都比沉默有用——
+报一个 bug、补一段复现步骤、指出文档写错的地方，都算贡献。
+
+**提 Issue**（欢迎，不用怕问题小）
+
+- 说清三件事：你的环境（Windows 版本、QQ 版本、Node 版本）、具体现象（报错原文 / 截图）、
+  复现步骤（点了什么、调了哪个 action、传了什么参数）。
+- 有日志就给日志：面板「控制台」页可导出，日志里出现 `result=5`、超时、`undefined` 都很有价值。
+- **贴之前先脱敏**：QQ 号、令牌、cookie、`sk-` 开头的密钥、聊天记录截图里的他人信息，一律打码。
+
+**提 PR**（同样欢迎，小改动可以直接开）
+
+- 修 bug、补兼容、改文案、加文档都行；想加新能力或动架构，建议先开个 Issue 聊一下，
+  免得写完发现方向不对。
+- 提交前请保持仓库的既有约束：**零 npm 运行时依赖**（HTTP / SSE / WebSocket 全是手写的，
+  别为了省事引入框架）、只监听 `127.0.0.1`、不新增会回传明文凭据的接口。
+- 一个 PR 尽量只做一件事，改动附上你怎么验证的（哪怕只是"本地跑通了这条 action"）。
+- 涉及客户端的调用约定，如果和现有代码里的注释冲突，说明你实测的客户端版本——这类知识只能靠实测积累。
+
+**不适合提的**：批量加好友、群发、抢红包、刷量这类功能与绕过风控的改法，见
+[docs/EULA.md](docs/EULA.md)，不讨论也不合并。
+
+> 维护者精力有限，Issue 不保证秒回；但每一条都会看。有用的复现步骤往往比一句"用不了"省下几小时排查。
 
 ## 致谢与许可
 
