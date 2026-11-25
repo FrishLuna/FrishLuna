@@ -1,12 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn, execFile } from 'node:child_process'
-import { promisify } from 'node:util'
+import { spawn } from 'node:child_process'
 import { load, qqDir, INJECTOR_DIR, ROOT } from './config.js'
+import * as plat from './platform.js'
 import * as bus from './bus.js'
-
-const execFileP = promisify(execFile)
-const PIPE_PREFIX = 'frishluna.'
 
 let launching = false
 let lastLaunchAt = 0
@@ -18,27 +15,18 @@ export function setProbe (p) { lastProbe = p }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** 列出现有 frishluna.* 命名管道，用来判断注入是否完成 */
+/** 列出现有桥接端点，用来判断注入是否完成（Windows 管道 / Linux socket） */
 export function listPipes () {
-  try {
-    return fs.readdirSync('\\\\.\\pipe\\').filter((n) => String(n).startsWith(PIPE_PREFIX))
-  } catch {
-    return []
-  }
+  return plat.listBridgeEntries()
 }
 
 export function pipesFor (pid) {
-  return listPipes().filter((n) => String(n).includes('.' + pid + '.'))
+  return plat.bridgesFor(pid)
 }
 
-/** 从管道名直接解析已注入的 pid，不启动任何子进程（零黑窗） */
+/** 从端点名直接解析已注入的 pid，不启动任何子进程 */
 export function pidsFromPipes () {
-  const out = new Set()
-  for (const n of listPipes()) {
-    const m = /^frishluna\.(\d+)\./.exec(String(n))
-    if (m) out.add(Number(m[1]))
-  }
-  return [...out]
+  return plat.pidsFromBridge()
 }
 
 /** 进程存活检测，零子进程（Windows 上 EPERM 也表示存在） */
@@ -49,21 +37,7 @@ export function isAlive (pid) {
 
 /** QQ 主进程（排除 --type=renderer/gpu/utility 这些子进程） */
 export async function listMainPids () {
-  const ps = [
-    'Get-CimInstance Win32_Process -Filter "Name=\'QQ.exe\'"',
-    '| Where-Object { $_.CommandLine -notmatch "--type=" }',
-    '| Select-Object -ExpandProperty ProcessId'
-  ].join(' ')
-  try {
-    const { stdout } = await execFileP('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps], {
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 8000
-    })
-    return String(stdout).split(/\s+/).filter((x) => /^\d+$/.test(x)).map(Number)
-  } catch {
-    return []
-  }
+  return plat.listMainPids()
 }
 
 export async function mainPid () {
@@ -103,14 +77,15 @@ function capture (child, tag) {
 function runPython (args, tag) {
   return new Promise((resolve) => {
     const cfg = load()
-    const py = process.env.FRISH_PYTHON || 'python'
+    const py = process.env.FRISH_PYTHON || (plat.IS_LINUX ? 'python3' : 'python')
     bus.info(tag, `$ ${py} ${args.map((a) => path.basename(a)).join(' ')}`)
     const child = spawn(py, args, {
       cwd: INJECTOR_DIR,
       windowsHide: true,
       env: Object.assign({}, process.env, {
         PYTHONIOENCODING: 'utf-8',
-        FL_QQ_EXE: cfg.qqExe
+        FL_QQ_EXE: cfg.qqExe,
+        FL_RUNTIME_DIR: plat.IS_LINUX ? plat.runtimeDir() : ''
       })
     })
     let out = ''
@@ -125,31 +100,53 @@ function runPython (args, tag) {
   })
 }
 
-/** 向已存在的进程注入指定 dll（默认注入 FrishLuna 自己的 payload） */
-export async function inject (pid, tag = 'inject', dllPath) {
+/** 向已存在的进程注入载荷（默认注入 FrishLuna 自己的 payload） */
+export async function inject (pid, tag = 'inject', libPath) {
   if (!pid) return { ok: false, msg: '没有目标 pid' }
-  const dll = dllPath || path.join(ROOT, 'payload', 'frishluna-payload.dll')
-  if (!fs.existsSync(dll)) {
-    bus.error(tag, '找不到 dll: ' + dll)
-    return { ok: false, msg: 'dll 缺失' }
+  const lib = libPath || plat.payloadLib()
+  if (!fs.existsSync(lib)) {
+    bus.error(tag, '找不到载荷文件: ' + lib + (plat.IS_LINUX ? '（先跑 payload/native/build_linux.sh）' : ''))
+    return { ok: false, msg: '载荷缺失' }
   }
   bus.info(tag, '正在连接 QQ…')
-  const r = await runPython([path.join(INJECTOR_DIR, 'inject.py'), '--pid', String(pid), '--dll', dll], tag)
+  const r = await runPython([plat.injectorScript(), '--pid', String(pid), '--lib', lib], tag)
   const okp = await waitPipes(pid, 15000)
   if (okp) bus.ok(tag, '连接成功')
   else bus.error(tag, '连接未成功，详见上方日志')
   return { ok: okp, pid, code: r.code }
 }
 
-/** 正常启动原生 QQ（客户端完整可用）后注入 */
+/** 正常启动原生 QQ（客户端完整可用）；Linux 优先用预加载，省掉「先登录再注入」的时序 */
 async function launchClient () {
   const cfg = load()
-  if (!fs.existsSync(cfg.qqExe)) {
-    bus.error('qq', 'QQ 路径不存在: ' + cfg.qqExe)
+  const exe = cfg.qqExe || plat.qqExeCandidates()[0] || ''
+  if (!exe || !fs.existsSync(exe)) {
+    bus.error('qq', 'QQ 路径不存在: ' + (exe || '(未设置)') + (plat.IS_LINUX ? '，请在设置里指定 qq 可执行文件' : ''))
     return { ok: false, msg: 'QQ 路径不存在' }
   }
   bus.info('qq', '启动原生 QQ 客户端…')
-  const child = spawn(cfg.qqExe, [], { cwd: qqDir(), detached: true, stdio: 'ignore', windowsHide: false })
+
+  const env = Object.assign({}, process.env)
+  let preloaded = false
+  if (plat.IS_LINUX && !process.env.FL_NO_PRELOAD) {
+    const lib = plat.payloadLib()
+    if (fs.existsSync(lib)) {
+      /* 预加载：加载器把载荷带进新进程，constructor 自己在启动阶段挂好钩子，
+         不需要 ptrace、不需要等登录，也不改安装目录里任何文件 */
+      env.LD_PRELOAD = env.LD_PRELOAD ? `${lib}:${env.LD_PRELOAD}` : lib
+      preloaded = true
+      bus.info('qq', '已带预加载启动（无需事后注入）')
+    }
+  }
+
+  plat.ensureRuntimeDir()
+  const child = spawn(exe, [], {
+    cwd: path.dirname(exe),
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+    env
+  })
   child.unref()
 
   // 等主进程出现
@@ -163,8 +160,20 @@ async function launchClient () {
     bus.error('qq', '等不到 QQ 主进程')
     return { ok: false, msg: 'QQ 没起来' }
   }
-  bus.ok('qq', `QQ 主进程 pid=${pid}，等它完成登录再注入…`)
-  await sleep(7000)                     // 让 QQ 自己登录、建窗口，避免注入过早
+  bus.ok('qq', `QQ 主进程 pid=${pid}`)
+
+  if (preloaded) {
+    for (let i = 0; i < 20; i++) {
+      if (pipesFor(pid).length >= 2) {
+        bus.ok('qq', '连接成功')
+        return { ok: true, pid }
+      }
+      await sleep(500)
+    }
+    bus.warn('qq', '预加载没连上，改用注入')
+  }
+
+  await sleep(plat.IS_LINUX ? 3000 : 7000)   // Windows 上让 QQ 自己登录、建窗口，避免注入过早
   return inject(pid, 'qq')
 }
 

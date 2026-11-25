@@ -1,7 +1,9 @@
 * text=auto
 *.cmd text eol=crlf
-*.vbs text eol=crlf
 *.bat text eol=crlf
+# vbs 是 UTF-16LE 带 BOM：绝不能当文本处理，否则 checkout/打包会按行尾转换把字节写坏，
+# 用户拿到手的脚本 VBScript 解析直接报错
+*.vbs binary
 *.png binary
 *.jpg binary
 *.ico binary

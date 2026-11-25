@@ -1,5 +1,6 @@
 import net from 'node:net'
 import { EventEmitter } from 'node:events'
+import { pipePath, encodeCmd } from './platform.js'
 
 const MAX_FRAME = 16 * 1024 * 1024
 const MAX_QUEUE = 64
@@ -36,8 +37,9 @@ export class Bridge extends EventEmitter {
   /** 两条管道都连上才算通 */
   get connected () { return this.evtUp && this.cmdUp }
 
-  get evtPath () { return `\\\\.\\pipe\\frishluna.${this.pid}.evt` }
-  get cmdPath () { return `\\\\.\\pipe\\frishluna.${this.pid}.cmd` }
+  /* 路径由平台层决定：Windows 命名管道 / Linux unix socket */
+  get evtPath () { return pipePath(this.pid, 'evt') }
+  get cmdPath () { return pipePath(this.pid, 'cmd') }
 
   attach (pid) {
     if (!pid) return
@@ -192,7 +194,7 @@ export class Bridge extends EventEmitter {
     }
 
     try {
-      if (sock.write(text) === false) {
+      if (sock.write(encodeCmd(text)) === false) {
         this._needDrain = true
         this._warnBackpressure('write-false')
       }
@@ -208,7 +210,7 @@ export class Bridge extends EventEmitter {
       if (!sock || sock.destroyed || sock.writable === false) return
       const text = this._queue.shift()
       try {
-        if (sock.write(text) === false) {
+        if (sock.write(encodeCmd(text)) === false) {
           this._needDrain = true
           this._warnBackpressure('flush-false')
           return
