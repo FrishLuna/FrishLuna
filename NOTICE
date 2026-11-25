@@ -13,3 +13,6 @@ Copyright (c) 2026 FrishLuna Authors
    qun.qq.com / qzone.qq.com / qfile.qq.com / multimedia.nt.qq.com.cn /
    p.qlogo.cn / q1.qlogo.cn。
 4. 使用本软件的一切风险由使用者自行承担，详见 docs/EULA.md。
+5. 部分实现思路参考了 SnowLuma（https://github.com/SnowLuma/SnowLuma/）。
+   此处仅为思路致谢：协议字段号与 wire 布局属于事实性内容，代码为本项目
+   自行编写，仓库不包含该项目的源码副本。

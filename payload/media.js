@@ -529,7 +529,7 @@
   /* 服务端 CompatQMsg（上传响应 f8）= 老协议 NotOnlineImage(C2C)/CustomFace(群) 现成字节，
      里面的 resId 是 NTV2COMPAT.xxx 兼容格式 —— 接收端（含手机端闪照解析）认这个。
      手造 resId=NTV2 fileUuid 的闪照接收端不识别（闪照不生效）；
-     CompatQMsg 才是正解（与普通图 compat 通道同源）。 */
+     CompatQMsg 才是正解（与普通图片的 compat 通道一致）。 */
   function flashCompatElems (apply, isGroup) {
     var compat = apply.compatQMsg
     if (!compat) return null

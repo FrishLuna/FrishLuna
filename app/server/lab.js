@@ -931,7 +931,7 @@ export async function groupFileUrlOp (args) {
   }
 }
 
-/* 登录凭证（clientKey + p_skey + bkn），get_credentials 同源 */
+/* 登录凭证（clientKey + p_skey + bkn），与 get_credentials 用同一份 */
 export async function credentialsOp () {
   const t0 = Date.now()
   try {
