@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.png" alt="FrishLuna — 月下的 QQNT 旁挂控制台" width="100%">
+  <img src="docs/assets/banner.png" alt="FrishLuna — 月下的 QQNT 旁挂控制台" width="560">
 </p>
 
 <h1 align="center">FrishLuna</h1>
