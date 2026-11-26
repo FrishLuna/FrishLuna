@@ -148,7 +148,9 @@ bridge.on('event', (ev) => {
     case 'msg': {
       /* 内置协议端链路：payload 入站事件 → kernel → OneBot WS 广播。
          与面板命令链路是两个独立消费者，互不影响。 */
-      feedKernelFromPayload(ev)
+      /* 本体自己发出去的消息（payload 标 ev.self）只喂面板命令链路，
+         不进 OneBot 广播 —— 下游协议端会把它当成「收到的消息」再回一次，直接成环。 */
+      if (!ev.self) feedKernelFromPayload(ev)
       /* 面板命令链路：入站只有 payload 这一条来源，无条件处理 */
       onInbound(ev)
       break
@@ -459,7 +461,9 @@ async function onInbound (ev) {
   /* 群消息顺手记下「群号 ↔ 群名」，给实验台的群号下拉用（内核群列表常为空） */
   if (isGroup) groups.learn(ev.chat.id, ev.peerName)
   /* 本体账号：selfId 由 host 在拿到登录态时注入；未注入时恒为 0，此处只会判成「非本体」 */
-  const isSelf = String(kernel.getSelfId() || '') === who && who !== '?'
+  /* 本体账号：payload 直接标 self（sendType===1）；selfId 由 host 在拿到登录态时注入，
+     未注入时恒为 0，只能靠 payload 那一侧认。 */
+  const isSelf = ev.self === true || (String(kernel.getSelfId() || '') === who && who !== '?')
   bus.info('qq', `← ${where} ${shown}${isSelf ? ' [本体]' : ''}: ${text.slice(0, 140)}`)
 
   /* 任意群、任意人：只判前缀（判定函数里没有发送者参数，无法做白名单）。

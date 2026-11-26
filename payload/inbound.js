@@ -75,7 +75,9 @@
     var listener = {
       onRecvMsg: function (msgList) { onList(msgList) },
       onRecvMsgSvrWithMsgArgs: function (msgList) { onList(msgList) },
-      onMsgInfoListUpdate: function () { noteShapeOnce('info-update', arguments) },
+      /* 本体自己发出去的消息不会走 onRecvMsg（内核只投递收到的），
+         但本地消息列表更新里带着它 —— 在这里补一次。 */
+      onMsgInfoListUpdate: function (arg) { onSelfList(arg) },
       onMsgDelete: function () { onDelete(arguments) }
     }
     globalThis.__fl_inbound_listener = listener
@@ -157,10 +159,6 @@
   }
 
   function noteShapeOnce (tag, args) {
-    if (tag === 'info-update') {
-      if (IB.infoShape) return
-      IB.infoShape = true
-    }
     var shape = []
     for (var i = 0; i < args.length && i < 4; i++) {
       var a = args[i]
@@ -186,6 +184,40 @@
     seen[mid] = true
     seenN++
     return false
+  }
+
+  /* 本体消息补挂：本地消息列表更新（onMsgInfoListUpdate）会把「自己刚发出去」
+     的那条也带过来，sendType === 1 就是这个标记（0 = 别人发的，实机对照过）。
+     两条限制防止误伤：
+       1) 只认 sendType === 1，别人发的仍旧只走 onRecvMsg，不会重复上报；
+       2) 只认 120 秒内的新消息 —— 翻历史、登录补数据也会触发这个回调，
+          不加时间窗会把陈年旧消息当成刚发的再处理一遍。 */
+  var SELF_ECHO_WINDOW_MS = 120000
+  function msgTimeMs (m) {
+    var t = Number(m && m.msgTime) || 0
+    if (!t) return 0
+    return t > 1e12 ? t : t * 1000          /* 秒 / 毫秒两种都吃 */
+  }
+
+  function onSelfList (arg) {
+    if (globalThis.__fl_inbound !== IB) return
+    var arr = toArray(arg)
+    if (!arr.length) return
+    var pick = []
+    var now = Date.now()
+    for (var i = 0; i < arr.length; i++) {
+      var m = arr[i]
+      if (!m) continue
+      if (Number(m.sendType) !== 1) continue
+      var mid = String(m.msgId || '')
+      if (mid && seen[mid]) continue
+      var t = msgTimeMs(m)
+      if (t && now - t > SELF_ECHO_WINDOW_MS) continue
+      pick.push(m)
+    }
+    if (!pick.length) return
+    IB.selfN = (IB.selfN || 0) + pick.length
+    onList(pick)
   }
 
   function onList (msgList) {
@@ -248,13 +280,15 @@
           evt: 'msg',
           chat: { type: chatType === 2 ? 'group' : 'private', id: peer },
           peerName: String(m.peerName || m.chatName || ''),
-          uin: sender,
+          /* 本体自发的消息带 senderUin（真 QQ 号），收到的群消息一般只有 uid —— 有就用 */
+          uin: (Number(m.senderUin) || 0) ? String(m.senderUin) : sender,
           senderUid: sender,
           nick: String(m.sendMemberName || m.sendNickName || ''),
           text: parts.join('').slice(0, 1000),
           rawTypes: rawTypes.slice(0, 32),
           msgId: String(m.msgId || ''),
           msgSeq: String(m.msgSeq || ''),
+          self: Number(m.sendType) === 1,
           at: Date.now()
         })
       } catch (e) { err('parse', e) }
