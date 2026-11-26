@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7aa2ff.svg" alt="License: MIT"></a>
-  <a href="https://github.com/FrishLuna/FrishLuna/releases/latest"><img src="https://img.shields.io/badge/release-v0.1.0-a78bfa.svg" alt="Latest release"></a>
+  <a href="https://github.com/FrishLuna/FrishLuna/releases/latest"><img src="https://img.shields.io/badge/release-v0.1.1-a78bfa.svg" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%20%2F%20Linux-5b8def.svg" alt="Platform: Windows / Linux">
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2022-3c873a.svg" alt="Node">
   <img src="https://img.shields.io/badge/runtime%20deps-0-4fd1a5.svg" alt="Zero runtime dependencies">
