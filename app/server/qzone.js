@@ -150,7 +150,7 @@ const httpPost = (url, body, headers) => httpText(url, 'POST', body, headers)
 
 /** 表单 POST 三连：发请求 → 解壳 → 校验业务码，收口成一句 */
 async function postForm (url, form, where, cookie) {
-  const reply = parseQzoneJson(await httpPost(url, form.toString(), { Cookie: cookie }))
+  const reply = readQzoneJson(await httpPost(url, form.toString(), { Cookie: cookie }))
   assertCode(reply, where)
   return reply
 }
@@ -162,7 +162,7 @@ const postMultipart = (url, cookie, form) => fetch(url, {
 })
 
 /** Qzone CGI 的三种外壳都吃：裸 JSON、`_Callback({...})`、`back({...});` */
-function parseQzoneJson (text) {
+function readQzoneJson (text) {
   const raw = String(text).trim()
   const first = raw.indexOf('{')
   const last = raw.lastIndexOf('}')
@@ -191,7 +191,7 @@ function assertCode (reply, where) {
   }
 }
 
-function pickPicUrl (pic) {
+function chooseImageUrl (pic) {
   return [pic.url3, pic.url2, pic.url1, pic.smallurl].find((u) => !!u) || ''
 }
 
@@ -239,7 +239,7 @@ export async function getMsgList ({ target_uin: targetUin, pos = 0, num = 20 } =
     ['need_private_comment', '1']
   ])
   let text = await httpGet('https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_msglist_v6?' + base, { Cookie: cookie })
-  let reply = parseQzoneJson(text)
+  let reply = readQzoneJson(text)
   /* -10000 是「使用人数过多」的老网关限流，换 user.qzone 路由重来一次 */
   if (reply.code === -10000) {
     const retry = formOf([
@@ -256,12 +256,12 @@ export async function getMsgList ({ target_uin: targetUin, pos = 0, num = 20 } =
       Cookie: cookie,
       Referer: `https://user.qzone.qq.com/${host}`
     })
-    reply = parseQzoneJson(text)
+    reply = readQzoneJson(text)
   }
   assertCode(reply, '说说列表')
   const list = reply.msglist
   if (!Array.isArray(list)) {
-    throw new Error(`无法获取空间说说列表（响应结构异常，多半是 cookie 失效）: ${text.slice(0, 200)}`)
+    throw new Error(`拉取说说列表失败：返回内容不是预期结构（cookie 可能已过期）: ${text.slice(0, 200)}`)
   }
   const rows = []
   for (const post of list) {
@@ -272,7 +272,7 @@ export async function getMsgList ({ target_uin: targetUin, pos = 0, num = 20 } =
     row.time = Number(post.created_time ?? 0)
     row.comment_num = Number(post.cmtnum ?? 0)
     row.is_private = Number(post.secret ?? 0) !== 0
-    row.images = pics.map(pickPicUrl).filter(Boolean)
+    row.images = pics.map(chooseImageUrl).filter(Boolean)
     rows.push(row)
   }
   const out = {}
@@ -293,7 +293,7 @@ async function fetchMsgDetail (jar, bkn, host, tid, page) {
   ]
   if (page) pairs.push(['pos', String(page.pos)], ['num', String(page.num)])
   const text = await httpGet('https://h5.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6?' + formOf(pairs), { Cookie: cookieToStr(jar) })
-  const detail = parseQzoneJson(text)
+  const detail = readQzoneJson(text)
   let code = detail.subcode ?? detail.code ?? -1
   if (detail.code !== undefined && detail.code !== 0) code = detail.code
   if (code !== 0) {
@@ -344,7 +344,7 @@ export async function getMsgDetail ({ tid, target_uin: targetUin, pos = 0, num =
 
 /** 把 feeds 返回的 JS 字面量读成纯数据：容忍裸键、单引号串、\xNN/\uNNNN、
  *  undefined 空洞；__proto__ 一律丢弃防原型污染。 */
-function parseJsLiteral (source) {
+function literalToValue (source) {
   const SPACE = new Set([' ', '\t', '\n', '\r', '\f', '\v'])
   const WORD = new Set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$')
   const STOP = new Set([',', '}', ']', ':', ' ', '\t', '\n', '\r'])
@@ -361,7 +361,7 @@ function parseJsLiteral (source) {
     return String.fromCharCode(Number.parseInt(part, 16))
   }
 
-  function readString (quote) {
+  function readCString (quote) {
     at += 1
     let acc = ''
     while (at < total) {
@@ -384,7 +384,7 @@ function parseJsLiteral (source) {
   function readKey () {
     skipSpace()
     const quote = here()
-    if (quote === '"' || quote === "'") return readString(quote)
+    if (quote === '"' || quote === "'") return readCString(quote)
     let word = ''
     while (at < total && WORD.has(source[at])) { word += source[at]; at += 1 }
     if (!word) throw new Error('feeds 字面量缺键名')
@@ -413,7 +413,7 @@ function parseJsLiteral (source) {
     const ch = here()
     if (ch === '{') return readObject()
     if (ch === '[') return readArray()
-    if (ch === '"' || ch === "'") return readString(ch)
+    if (ch === '"' || ch === "'") return readCString(ch)
     if (ch === undefined) throw new Error('feeds 字面量意外结束')
     return readScalar()
   }
@@ -462,10 +462,10 @@ function parseJsLiteral (source) {
   return readValue()
 }
 
-function parseQzoneCallback (text) {
+function unwrapJsonpCallback (text) {
   const brace = text.indexOf('{')
   if (brace === -1) throw new Error('feeds 响应解析失败（无对象体）')
-  const value = parseJsLiteral(text.slice(brace))
+  const value = literalToValue(text.slice(brace))
   if (typeof value !== 'object' || value === null) throw new Error('feeds 响应解析失败（非对象）')
   return value
 }
@@ -492,7 +492,7 @@ export async function getFeeds ({ page_num: pageNum = 1, count = 10 } = {}) {
     ['outputhtmlfeed', '1']
   ]
   const text = await httpGet('https://h5.qzone.qq.com/proxy/domain/ic2.qzone.qq.com/cgi-bin/feeds/feeds3_html_more?' + formOf(pairs), { Cookie: cookieToStr(jar) })
-  const reply = parseQzoneCallback(text)
+  const reply = unwrapJsonpCallback(text)
   assertCode(reply, '好友动态')
   const bucket = reply.data || {}
   const feeds = []
@@ -522,7 +522,7 @@ function normalizeUgcRight (ugcRight) {
   throw new Error('ugc_right 只能是 1/4/16/64/128')
 }
 
-function normalizeTargetUins (targetUins) {
+function toUinList (targetUins) {
   const text = String(targetUins ?? '').trim()
   if (text.length === 0) return ''
   const uniq = []
@@ -553,7 +553,7 @@ function richPair (richType, richval, strict) {
 /** ugc_right=16/128 是白名单可见，必须带目标 uin 列表 */
 function visibleTargets (right, targetUins) {
   if (right !== 16 && right !== 128) return ''
-  const list = normalizeTargetUins(targetUins)
+  const list = toUinList(targetUins)
   if (!list) throw new Error('ugc_right=16/128 时 target_uins 必填')
   return list
 }
@@ -679,7 +679,7 @@ export async function setBlack ({ target_uin: targetUin, ban = true } = {}) {
     ['qzreferrer', `https://user.qzone.qq.com/${uin}/main`]
   ])
   const text = await httpPost(`https://h5.qzone.qq.com/proxy/domain/w.qzone.qq.com/cgi-bin/right/cgi_black_action_new?g_tk=${bkn}`, body.toString(), { Cookie: cookieToStr(jar) })
-  const reply = parseQzoneJson(text.replace(/(\{\s*)name\s*:/, '$1"name":'))
+  const reply = readQzoneJson(text.replace(/(\{\s*)name\s*:/, '$1"name":'))
   assertCode(reply, ban ? '空间拉黑' : '空间解拉黑')
   return { target_uin: Number(who), ban: !!ban }
 }
@@ -871,7 +871,7 @@ async function loadAlbumImage (image) {
     }
   }
   if (!bytes || !bytes.length) throw new Error('image 内容为空')
-  if (!isKnownImageHead(bytes)) throw new Error('群相册上传仅支持 JPEG/PNG/GIF/WebP/BMP 图片')
+  if (!looksLikeImageBytes(bytes)) throw new Error('群相册上传仅支持 JPEG/PNG/GIF/WebP/BMP 图片')
   return { bytes, name }
 }
 
@@ -883,7 +883,7 @@ const IMAGE_HEADS = [
   { size: 2, sig: [0x42, 0x4d] } /* BM */
 ]
 
-function isKnownImageHead (buf) {
+function looksLikeImageBytes (buf) {
   const known = IMAGE_HEADS.some(({ size, sig }) =>
     buf.length >= size && sig.every((byte, i) => buf[i] === byte))
   if (known) return true
@@ -917,7 +917,7 @@ export async function albumList ({ group } = {}) {
     ['getMemberRole', '0']
   ])
   const text = await httpGet('https://h5.qzone.qq.com/proxy/domain/u.photo.qzone.qq.com/cgi-bin/upp/qun_list_album_v2?' + qs, { Cookie: cookieToStr(jar) })
-  const data = parseQzoneJson(text)
+  const data = readQzoneJson(text)
   assertCode(data, '群相册列表')
   const list = (data.data && data.data.album) || []
   const album = list.map((a) => ({
@@ -933,7 +933,7 @@ export async function albumList ({ group } = {}) {
 }
 
 /** 建会话请求的公共骨架：token/env/model/session 各版本都一样 */
-function controlReq ({ uin, jar, appid, checksum, checkType, fileLen, refer, bizReq, cmd }) {
+function albumControlReq ({ uin, jar, appid, checksum, checkType, fileLen, refer, bizReq, cmd }) {
   return {
     uin,
     token: { type: 4, data: jar.p_skey || '', appid: 5 },
@@ -1082,7 +1082,7 @@ export async function albumUploadImage ({ group, album_id: albumId, album_name: 
     checksum: md5,
     cookie,
     bkn,
-    req: controlReq({
+    req: albumControlReq({
       uin,
       jar,
       appid: 'qun',
@@ -1166,7 +1166,7 @@ async function probeVideo (filePath) {
 }
 
 /** 通用分片上传（图片/视频共用）：FileBatchControl 建会话 → 逐片 multipart → 收 biz（vid/photoId） */
-async function albumSliceUpload ({ checksum, cookie, bkn, uin, filePath, fileSize, controlReq: req, appid, checkType, uploadCmd, formUploadType, formSliceSize }) {
+async function albumSliceUpload ({ checksum, cookie, bkn, uin, filePath, fileSize, albumControlReq: req, appid, checkType, uploadCmd, formUploadType, formSliceSize }) {
   const fs = await import('node:fs')
   const { session, sliceSize } = await openUploadSession({ checksum, cookie, bkn, req })
   const biz = {}
@@ -1254,7 +1254,7 @@ export async function albumUploadVideo ({ group, album_id: albumId, album_name: 
       head.subarray(8, 12).toString('latin1') === 'WEBP')
   if (looksImage) throw new Error('传的是图片——群相册视频请用 upload_image_to_qun_album 或换视频文件')
   const isBmff = head.length >= 8 && head.subarray(4, 8).toString('latin1') === 'ftyp'
-  if (!isBmff) throw new Error('群相册视频上传仅支持 MP4 等 ISO BMFF 视频')
+  if (!isBmff) throw new Error('视频文件头缺少 ftyp 标识（不是 MP4 容器），群相册拒收')
 
   const tmpVideo = os.tmpdir() + `/fl_album_video_${Date.now()}.mp4`
   fs.writeFileSync(tmpVideo, buf)
@@ -1277,7 +1277,7 @@ export async function albumUploadVideo ({ group, album_id: albumId, album_name: 
       appid: 'video_qun',
       checkType: 1,
       uploadCmd: 'FileUploadVideo',
-      controlReq: controlReq({
+      albumControlReq: albumControlReq({
         uin,
         jar,
         appid: 'video_qun',
@@ -1307,7 +1307,7 @@ export async function albumUploadVideo ({ group, album_id: albumId, album_name: 
       appid: 'qun',
       checkType: 0,
       uploadCmd: 'FileUpload',
-      controlReq: controlReq({
+      albumControlReq: albumControlReq({
         uin,
         jar,
         appid: 'qun',

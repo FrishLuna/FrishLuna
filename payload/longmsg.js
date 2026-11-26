@@ -306,7 +306,7 @@
     return Array.prototype.slice.call(zlib.gunzipSync(Buffer.from(arr)))
   }
 
-  function resolveSelfUid () {
+  function findOwnUid () {
     var info = globalThis.__fl_self || null
     if (info && info.uid) return Promise.resolve(String(info.uid))
     return Promise.resolve(OPS.selfInfo()).then(function (d) {
@@ -328,7 +328,7 @@
     if (!/^\d{5,12}$/.test(peer)) throw new Error('目标必须是 5~12 位数字：' + peer)
     if (!nodes.length) throw new Error('转发节点为空')
 
-    return resolveSelfUid().then(function (selfUid) {
+    return findOwnUid().then(function (selfUid) {
       var longMsg = buildLongMsgResult(nodes, selfUid)
       var payload = gzipBytes(longMsg)
       var info = cat(
@@ -372,7 +372,7 @@
     var a = args || {}
     var resId = String(a.resId || a.res_id || '')
     if (!resId) throw new Error('resId 为空')
-    return resolveSelfUid().then(function (selfUid) {
+    return findOwnUid().then(function (selfUid) {
       var info = cat(
         pbB(1, pbS(2, selfUid)),
         pbS(2, resId),

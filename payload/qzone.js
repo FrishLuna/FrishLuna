@@ -349,7 +349,7 @@
    * args: { cmd, sub, bodyHex, uinForm } → 信封 {1:cmd,2:sub,4:body[,12:1]}，
    * 返回 { bodyHex, errCode, errMsg }。body 由 app 侧构造（flash.js 有带
    * 显式零值的 pb 编码器），payload 只负责收发与信封拆包。 */
-  function hexToBytes (h) {
+  function hexToBuffer (h) {
     var out = []
     var s = String(h || '')
     for (var i = 0; i + 1 < s.length; i += 2) out.push(parseInt(s.substr(i, 2), 16))
@@ -366,7 +366,7 @@
     var cmd = Number(a.cmd)
     var sub = Number(a.sub) || 0
     if (!(cmd > 0)) throw new Error('cmd 必须是正整数')
-    var body = hexToBytes(a.bodyHex)
+    var body = hexToBuffer(a.bodyHex)
     var env = cat(pbU(1, cmd), pbU(2, sub), pbB(4, body))
     if (a.uinForm) env = cat(env, pbU(12, 1))
     /* 群打卡 0xEB7 的服务端兼容大写 wire 名 */
@@ -387,7 +387,7 @@
     var a = args || {}
     var cmd = String(a.cmd || '')
     if (!cmd) throw new Error('cmd 不能为空')
-    return sendRaw(cmd, hexToBytes(a.bodyHex)).then(function (r) {
+    return sendRaw(cmd, hexToBuffer(a.bodyHex)).then(function (r) {
       if (r.result && r.result !== 0) throw new Error('数据发送失败（' + r.result + '）' + (r.errMsg || ''))
       if (!r.raw) throw new Error('无回执：' + (r.errMsg || ''))
       return { rawHex: bytesToHex(r.raw), errMsg: r.errMsg || '' }

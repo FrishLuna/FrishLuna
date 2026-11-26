@@ -164,7 +164,7 @@ export async function getGroupRequests () {
   return out.map(toPlain)
 }
 
-async function applyGroupRequest (req, approve, reason) {
+async function handleGroupRequest (req, approve, reason) {
   if (!req.seq || !req.group_id) throw new Error('申请记录缺 seq/group_id，无法处理')
   const msg = String(reason ?? '').length > 0 ? String(reason) : ' '
   const inner = cat(
@@ -200,7 +200,7 @@ export async function setGroupAddRequest ({ flag, seq, group_id, user_id, approv
        不能靠错误文本判形态。 */
     let flagErr = null
     try {
-      await applyGroupRequest({ ...fromFlag, operate_trans_info: '' }, approve, reason)
+      await handleGroupRequest({ ...fromFlag, operate_trans_info: '' }, approve, reason)
       return { handled: true, source: 'flag', seq: String(fromFlag.seq), group_id: fromFlag.group_id }
     } catch (e) { flagErr = e }
     try {
@@ -208,7 +208,7 @@ export async function setGroupAddRequest ({ flag, seq, group_id, user_id, approv
       const hit = list.find((r) => String(r.seq) === String(fromFlag.seq) &&
         (!fromFlag.group_id || r.group_id === fromFlag.group_id) && r.event_type > 0)
       if (hit) {
-        await applyGroupRequest(hit, approve, reason)
+        await handleGroupRequest(hit, approve, reason)
         return { handled: true, source: 'inbox', seq: hit.seq, group_id: hit.group_id, user_id: hit.target.uin, comment: hit.comment }
       }
     } catch { /* 回退失败：抛原始 flag 直发错误 */ }
@@ -226,7 +226,7 @@ export async function setGroupAddRequest ({ flag, seq, group_id, user_id, approv
       (!user_id || r.target.uin === Number(user_id)))
   }
   if (!hit) throw new Error('没在 0x10C0 收件箱里找到匹配的入群申请（可能已处理/过期，或群内邀请卡不进收件箱）')
-  await applyGroupRequest(hit, approve, reason)
+  await handleGroupRequest(hit, approve, reason)
   return { handled: true, source: 'inbox', seq: hit.seq, group_id: hit.group_id, user_id: hit.target.uin, comment: hit.comment }
 }
 

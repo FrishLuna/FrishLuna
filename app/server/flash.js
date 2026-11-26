@@ -202,62 +202,59 @@ function sliceStateDigests (bytes, sliceCount, sliceSize) {
   return out
 }
 
-function makeCrcTable () {
+/* CRC32（PNG 规范固定多项式 0xedb88320），查找表首次使用时构建一次 */
+const CRC_TABLE = (() => {
   const table = new Uint32Array(256)
-  for (let i = 0; i < 256; i += 1) {
-    let c = i
-    for (let bit = 0; bit < 8; bit += 1) {
-      /* 无分支写法：最低位为 1 时异或多项式（-1 是全 1 掩码） */
-      c = ((c >>> 1) ^ (0xedb88320 & -(c & 1))) >>> 0
-    }
-    table[i] = c
+  for (let n = 0; n < 256; n += 1) {
+    let v = n
+    for (let bit = 0; bit < 8; bit += 1) v = (v & 1) ? (0xedb88320 ^ (v >>> 1)) : (v >>> 1)
+    table[n] = v >>> 0
   }
   return table
-}
+})()
 
-const CRC_TABLE = makeCrcTable()
-
-function crc32 (bytes) {
+function pngCrc32 (buf) {
   let acc = 0xffffffff
-  for (const byte of bytes) acc = (acc >>> 8) ^ CRC_TABLE[(acc ^ byte) & 0xff]
-  return (~acc) >>> 0
+  for (let i = 0; i < buf.length; i += 1) acc = CRC_TABLE[(acc ^ buf[i]) & 0xff] ^ (acc >>> 8)
+  return (acc ^ 0xffffffff) >>> 0
 }
 
-function pngChunk (type, payload) {
-  const size = Buffer.alloc(4)
-  size.writeUInt32BE(payload.length)
-  const name = Buffer.from(type, 'ascii')
-  const check = Buffer.alloc(4)
-  check.writeUInt32BE(crc32(Buffer.concat([name, payload])))
-  return Buffer.concat([size, name, payload, check])
+/** 一个 PNG 数据块：长度(4) + 类型(4) + 内容 + CRC(4) */
+function pngBlock (kind, body) {
+  const head = Buffer.alloc(8)
+  head.writeUInt32BE(body.length, 0)
+  head.write(kind, 4, 'ascii')
+  const tail = Buffer.alloc(4)
+  tail.writeUInt32BE(pngCrc32(Buffer.concat([head.subarray(4), body])))
+  return Buffer.concat([head, body, tail])
 }
 
-/** 随机纯色 PNG（8bit RGB）。颜色每次随机，SHA1 不同才不会被秒传。 */
-function generatePng (width, height) {
-  const rgb = []
-  for (let chan = 0; chan < 3; chan += 1) rgb.push(Math.floor(Math.random() * 256))
-  const stride = width * 3 + 1
-  const raw = Buffer.alloc(stride * height)
-  for (let row = 0; row < height; row += 1) {
-    const base = row * stride
-    raw[base] = 0 /* 行过滤 none */
-    for (let col = 0; col < width; col += 1) {
-      const px = base + 1 + col * 3
-      raw[px] = rgb[0]
-      raw[px + 1] = rgb[1]
-      raw[px + 2] = rgb[2]
-    }
+/** 随机纯色 PNG（位深 8 / 真彩 RGB）。缩略图只需占位，颜色每次随机，
+ *  保证 SHA1 不与已有文件相撞、避免被当成秒传跳过。 */
+function solidThumbPng (width, height) {
+  const rgb = [randomBytes(1)[0], randomBytes(1)[0], randomBytes(1)[0]]
+  const pixels = Buffer.alloc(width * height * 3)
+  for (let i = 0; i < pixels.length; i += 3) {
+    pixels[i] = rgb[0]
+    pixels[i + 1] = rgb[1]
+    pixels[i + 2] = rgb[2]
+  }
+  /* 每行前补一个过滤字节（0 = None），逐行拼好再整体 zlib */
+  const rows = []
+  for (let y = 0; y < height; y += 1) {
+    rows.push(Buffer.from([0]))
+    rows.push(pixels.subarray(y * width * 3, (y + 1) * width * 3))
   }
   const ihdr = Buffer.alloc(13)
   ihdr.writeUInt32BE(width, 0)
   ihdr.writeUInt32BE(height, 4)
-  ihdr[8] = 8
-  ihdr[9] = 2
+  ihdr[8] = 8 /* 位深 */
+  ihdr[9] = 2 /* 颜色类型：真彩 */
   return Buffer.concat([
-    Buffer.from('89504e470d0a1a0a', 'hex'),
-    pngChunk('IHDR', ihdr),
-    pngChunk('IDAT', deflateSync(raw)),
-    pngChunk('IEND', Buffer.alloc(0))
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngBlock('IHDR', ihdr),
+    pngBlock('IDAT', deflateSync(Buffer.concat(rows))),
+    pngBlock('IEND', Buffer.alloc(0))
   ])
 }
 
@@ -275,28 +272,23 @@ const FORMAT_CODES = new Map([
   ['ttf', 16], ['otf', 16], ['ipa', 17], ['key', 18], ['note', 19],
   ['numbers', 20], ['pages', 21], ['sketch', 22], ['dmg', 23], ['pkg', 24], ['exe', 27]
 ])
-function flashApplyTypeCode (ext) {
+function pickApplyTypeCode (ext) {
   if (ext === 'zip') return 6
-  if (ARC_EXT.has(ext)) return 2
-  return 7
+  return ARC_EXT.has(ext) ? 2 : 7
 }
-function flashFormatCode (ext) {
+function pickFormatCode (ext) {
   if (IMG_EXT.has(ext)) return 26
   if (AUD_EXT.has(ext)) return 1
   if (VID_EXT.has(ext)) return 2
   if (ARC_EXT.has(ext)) return 4
-  const fixed = FORMAT_CODES.get(ext)
-  return fixed === undefined ? 11 : fixed
+  const hit = FORMAT_CODES.get(ext)
+  return hit === undefined ? 11 : hit
 }
 
-function fileTypeCode (fileName) {
-  const lower = fileName.toLowerCase()
-  const dot = lower.lastIndexOf('.')
-  const ext = dot < 0 ? '' : lower.slice(dot + 1)
-  const codes = {}
-  codes.typeCode = flashApplyTypeCode(ext)
-  codes.formatCode = flashFormatCode(ext)
-  return codes
+function codesForFile (fileName) {
+  const name = String(fileName || '').toLowerCase()
+  const ext = name.includes('.') ? name.split('.').pop() : ''
+  return { typeCode: pickApplyTypeCode(ext), formatCode: pickFormatCode(ext) }
 }
 
 /** sub=103 用的 fileId（客户端侧 protobuf，最后走 base64url）：
@@ -628,74 +620,67 @@ const SLICE_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.2)'
 }
 
-async function sliceuploadFile ({ bytes, rkey, sha1StateV, sliceCount, appid }) {
-  for (let i = 0; i < sliceCount; i += 1) {
-    const from = i * FLASH_SLICE_SIZE
-    const take = Math.min(FLASH_SLICE_SIZE, bytes.length - from)
-    const chunk = bytes.subarray(from, from + take)
+/** 按 1 MiB 切片顺序 POST 到 sliceupload。分片号从字节偏移算出，
+ *  服务端每片都回 f5 状态，必须逐片确认。 */
+async function postChunks ({ bytes, rkey, sha1StateV, sliceCount, appid }) {
+  const stateField = []
+  for (const state of sha1StateV) pb(stateField, 1, state)
+  const stateBytes = Buffer.from(stateField)
+  let offset = 0
+  for (let slice = 0; slice < sliceCount; slice += 1) {
+    const take = Math.min(FLASH_SLICE_SIZE, bytes.length - offset)
+    const chunk = bytes.subarray(offset, offset + take)
     const inner = []
-    pb(inner, 1, Buffer.alloc(0), true)
+    pb(inner, 1, Buffer.alloc(0), true) /* f1 空 message，服务端要求出现在位 */
     ps(inner, 2, rkey)
-    pv(inner, 3, from, true)
-    pv(inner, 4, from + take - 1, true)
+    pv(inner, 3, offset, true)
+    pv(inner, 4, offset + take - 1, true)
     pb(inner, 5, createHash('sha1').update(chunk).digest())
-    const stv = []
-    for (const state of sha1StateV) pb(stv, 1, state)
-    pb(inner, 6, Buffer.from(stv))
+    pb(inner, 6, stateBytes)
     pb(inner, 7, chunk)
-    const body = []
-    pv(body, 1, 0, true)
-    pv(body, 2, appid ?? 14901, true)
-    pv(body, 3, 2, true)
-    pb(body, 107, Buffer.from(inner))
-    const wire = Buffer.from(body)
-    const resp = await fetch(SLICE_UPLOAD_URL, {
-      method: 'POST',
-      body: wire,
-      headers: SLICE_HEADERS
-    })
+    const outer = []
+    pv(outer, 1, 0, true)
+    pv(outer, 2, appid ?? 14901, true)
+    pv(outer, 3, 2, true)
+    pb(outer, 107, Buffer.from(inner))
+    const wire = Buffer.from(outer)
+    const resp = await fetch(SLICE_UPLOAD_URL, { method: 'POST', body: wire, headers: SLICE_HEADERS })
     if (!resp.ok) {
       const detail = await safeText(resp)
-      throw new Error(`sliceupload 第 ${i} 片被拒：HTTP ${resp.status}｜回包=${detail.slice(0, 300)}｜上行长度=${wire.length}｜rkey=${String(rkey).slice(0, 32)}｜首 40 字节=${wire.subarray(0, 40).toString('hex')}`)
+      throw new Error(`sliceupload 第 ${slice} 片被拒：HTTP ${resp.status}｜回包=${detail.slice(0, 300)}｜上行长度=${wire.length}｜rkey=${String(rkey).slice(0, 32)}｜首 40 字节=${wire.subarray(0, 40).toString('hex')}`)
     }
-    const view = rd(Buffer.from(await resp.arrayBuffer()))
-    const state = view.str(5)
-    if (state !== 'success') throw new Error(`sliceupload 第 ${i} 片失败：${state || '响应无 status'}`)
+    const state = rd(Buffer.from(await resp.arrayBuffer())).str(5)
+    if (state !== 'success') throw new Error(`sliceupload 第 ${slice} 片失败：${state || '响应无 status'}`)
+    offset += take
   }
 }
 
-async function prepareAndApply ({ filesetUuid, fileUuid, fileName, fileSize, md5Hex, sha1Hex, fileIndex, formatCode, thumbType, width, height }) {
-  try {
-    const rkey = await oidb(0x12a9, 100, bodyPrepareUpload({ filesetUuid, fileUuid, fileName, fileSize, sha1Hex, fileIndex, formatCode, thumbType, width, height }), true)
-    let rkeyStr = ''
-    if (rkey.length) {
-      const d = rd(rkey)
-      const w = d.f(2)
-      if (w) rkeyStr = rd(w).str(1)
-    }
-    const fileIdB64 = fileIdProto(hexToBuf(sha1Hex), fileSize, 14901).toString('base64url')
-    await oidb(0x12a9, 103, bodyApplyUpload({ filesetUuid, fileUuid, fileName, fileSize, md5Hex, sha1Hex, fileIndex, formatCode, fileIdB64 }), true)
-    return rkeyStr
-  } catch (e) {
-    throw e
-  }
+/** 0x12a9 sub=100 换 rkey + sub=103 报备 fileId。返回空串表示服务端判定秒传，
+ *  调用方应跳过该文件的分片上传。 */
+async function requestUploadTicket ({ filesetUuid, fileUuid, fileName, fileSize, md5Hex, sha1Hex, fileIndex, formatCode, thumbType, width, height }) {
+  const prepared = await oidb(0x12a9, 100, bodyPrepareUpload({ filesetUuid, fileUuid, fileName, fileSize, sha1Hex, fileIndex, formatCode, thumbType, width, height }), true)
+  const wrap = prepared.length ? rd(prepared).f(2) : null
+  const rkeyStr = wrap ? rd(wrap).str(1) : ''
+  const fileIdB64 = fileIdProto(hexToBuf(sha1Hex), fileSize, 14901).toString('base64url')
+  await oidb(0x12a9, 103, bodyApplyUpload({ filesetUuid, fileUuid, fileName, fileSize, md5Hex, sha1Hex, fileIndex, formatCode, fileIdB64 }), true)
+  return rkeyStr
 }
 
 async function uploadThumbnail ({ filesetUuid, mainFileUuid, thumbType, fileIndex }) {
   const isPng = thumbType === 'png'
   const width = 526 /* QQ 客户端缩略图尺寸，1x1 会被服务端 400 */
   const height = 360
-  const thumbBytes = generatePng(width, height)
+  const thumbBytes = solidThumbPng(width, height)
   const appid = isPng ? 14903 : 14902
   const fileUuid = isPng ? randomUUID() : mainFileUuid
   const md5Hex = createHash('md5').update(thumbBytes).digest('hex')
   const sha1Hex = createHash('sha1').update(thumbBytes).digest('hex')
   const fileName = isPng ? randomUUID().slice(0, 8) + '_one.png' : md5Hex.slice(0, 32) + '.jpg'
   const formatCode = isPng ? 26 : 2
-  const rkeyStr = await prepareAndApply({ filesetUuid, fileUuid, fileName, fileSize: thumbBytes.length, md5Hex, sha1Hex, fileIndex, formatCode, thumbType, width, height })
+  const rkeyStr = await requestUploadTicket({ filesetUuid, fileUuid, fileName, fileSize: thumbBytes.length, md5Hex, sha1Hex, fileIndex, formatCode, thumbType, width, height })
   if (!rkeyStr) return
   const sha1StateV = sliceStateDigests(thumbBytes, 1, thumbBytes.length)
-  await sliceuploadFile({ bytes: thumbBytes, rkey: rkeyStr, sha1StateV, sliceCount: 1, appid })
+  await postChunks({ bytes: thumbBytes, rkey: rkeyStr, sha1StateV, sliceCount: 1, appid })
 }
 
 /** 路径分隔符统一压成下划线，两端空白去掉 */
@@ -711,7 +696,7 @@ export async function createFlashTask ({ files, name } = {}) {
     const staged = await loadSourceFile(entry.file)
     const wanted = flattenName(entry.name)
     const fileName = wanted || staged.fileName
-    const codes = fileTypeCode(fileName)
+    const codes = codesForFile(fileName)
     items.push({
       tmpPath: staged.tmpPath,
       bytes: staged.bytes,
@@ -728,7 +713,9 @@ export async function createFlashTask ({ files, name } = {}) {
     const first = items[0]
     const isMulti = items.length > 1
     let filesetName = String(name ?? '').trim()
-    if (!filesetName) filesetName = isMulti ? `${first.fileName}等${items.length}个文件` : first.fileName
+    if (!filesetName) {
+      filesetName = isMulti ? `${first.fileName}（共 ${items.length} 个文件）` : first.fileName
+    }
     let totalSize = 0
     for (const item of items) totalSize += item.bytes.length
     const applyReq = { fileName: filesetName, fileSize: totalSize, typeCode: first.typeCode, uploader }
@@ -750,13 +737,13 @@ export async function createFlashTask ({ files, name } = {}) {
         fileIndex: item.fileIndex,
         formatCode: item.formatCode
       }
-      prepared.push({ item, bytes: item.bytes, rkeyStr: await prepareAndApply(params) })
+      prepared.push({ item, bytes: item.bytes, rkeyStr: await requestUploadTicket(params) })
     }
     for (const job of prepared) {
       if (!job.rkeyStr) continue /* 秒传：prepare 没给 rkey，跳过 sliceupload */
       const count = Math.ceil(job.bytes.length / FLASH_SLICE_SIZE)
       const sha1StateV = sliceStateDigests(job.bytes, count, FLASH_SLICE_SIZE)
-      await sliceuploadFile({ bytes: job.bytes, rkey: job.rkeyStr, sha1StateV, sliceCount: count })
+      await postChunks({ bytes: job.bytes, rkey: job.rkeyStr, sha1StateV, sliceCount: count })
     }
     await uploadThumbnail({ filesetUuid, mainFileUuid: items[0].fileUuid, thumbType: 'png', fileIndex: items.length + 1 })
     await uploadThumbnail({ filesetUuid, mainFileUuid: items[0].fileUuid, thumbType: 'jpg', fileIndex: items.length + 2 })
@@ -839,6 +826,30 @@ export async function listFilesets () {
   return { count: entries.length, filesets: entries }
 }
 
+/** 0x12a9 sub=200 的响应 f3 是一段 ASCII：主机名后面紧跟 /download?appid=14901 路径，
+ *  rkey 不在路径里而是另存一处，所以要把两段拼起来。返回 null 表示字段不可用。 */
+function downloadUrlFromBody (raw) {
+  const ascii = Buffer.from(raw).toString('latin1')
+  const hostAt = ascii.indexOf('multimedia.qfile.qq.com')
+  if (hostAt < 0) return null
+  let end = hostAt
+  while (end < ascii.length) {
+    const code = ascii.charCodeAt(end)
+    if (code < 0x20 || code > 0x7e) break
+    end += 1
+  }
+  const located = ascii.slice(hostAt, end)
+  if (located.indexOf('/download?appid=14901') < 0) return null
+  let url = 'https://' + located
+  const keyAt = ascii.indexOf('rkey=')
+  if (keyAt >= 0) {
+    let keyEnd = keyAt + 5
+    while (keyEnd < ascii.length && /[A-Za-z0-9_-]/.test(ascii[keyEnd])) keyEnd += 1
+    if (keyEnd > keyAt + 5) url += '&' + ascii.slice(keyAt, keyEnd)
+  }
+  return url
+}
+
 /** 主文件下载直链（0x93d4 → 0x12a9 sub=200），fileId 未就绪时按 1s/2s/4s/4s 重试 */
 export async function getFlashFileUrl ({ fileset_uuid: uuid, file_index: fileIndex } = {}) {
   if (!uuid) throw new Error('fileset_uuid 必填')
@@ -869,13 +880,9 @@ export async function getFlashFileUrl ({ fileset_uuid: uuid, file_index: fileInd
     const dd = rd(dl)
     const raw = dd.f(3)
     if (!raw || !raw.length) continue
-    const text = Buffer.from(raw).toString('latin1')
-    const host = /multimedia\.qfile\.qq\.com/.exec(text)
-    const path = /\/download\?appid=14901[\x20-\x7e]*/.exec(text)
-    const rkey = /rkey=([A-Za-z0-9_-]+)/.exec(text)
-    if (!host || !path) continue
-    const base = `https://${host[0]}${path[0]}`
-    return { url: rkey ? `${base}&${rkey[0]}` : base, file_name: meta.fileName, file_id: meta.fileId }
+    const url = downloadUrlFromBody(raw)
+    if (!url) continue
+    return { url, file_name: meta.fileName, file_id: meta.fileId }
   }
   throw new Error('拿不到主文件下载直链（0x93d4 无 fileId 或 0x12a9 无响应）')
 }

@@ -312,8 +312,9 @@ async function replyTo (ev, text) {
   if (!r || !r.ok) bus.warn('cmd', `回复失败：${(r && r.msg) || '未知原因'}`)
 }
 
-/* 同一人、同一会话内 2 秒只回一次：只挡连点刷屏，正常发 #fl 不受影响 */
-const FL_COOLDOWN_MS = 2000
+/* 同一人、同一会话内的回复冷却。0 = 完全关闭（冷却语义与 SnowLuma 一致：
+ * 小于等于 0 即禁用）。想再开就把毫秒数填回来，比如 2000。 */
+const FL_COOLDOWN_MS = 0
 const flLast = new Map()
 
 /**
@@ -467,11 +468,13 @@ async function onInbound (ev) {
      不触发、不回话、不记日志。 */
   if (!isPureText(ev.rawTypes) || !matchTrigger(text, prefix)) return
 
-  const key = `${isGroup ? ev.chat.id : 'p' + who}:${who}`
-  const last = flLast.get(key) || 0
-  if (Date.now() - last < FL_COOLDOWN_MS) return
-  flLast.set(key, Date.now())
-  if (flLast.size > 500) flLast.clear()      // 只是冷却表，整体清空不影响正确性
+  if (FL_COOLDOWN_MS > 0) {
+    const key = `${isGroup ? ev.chat.id : 'p' + who}:${who}`
+    const last = flLast.get(key) || 0
+    if (Date.now() - last < FL_COOLDOWN_MS) return
+    flLast.set(key, Date.now())
+    if (flLast.size > 500) flLast.clear()    // 只是冷却表，整体清空不影响正确性
+  }
 
   const r = await execute(text, { source: 'qq', uin: who, uid: String(ev.senderUid || '') })
   bus.log(r.ok ? 'ok' : 'warn', 'cmd', `› ${text}\n${r.text}`.slice(0, 3000))
