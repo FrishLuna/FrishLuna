@@ -1,0 +1,32 @@
+services:
+  frishluna:
+    build: .
+    image: frishluna:latest
+    container_name: frishluna
+    restart: unless-stopped
+    shm_size: 1gb
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+    environment:
+      VNC_PASSWD: ${VNC_PASSWD:-vncpasswd}
+      FL_UID: ${FL_UID:-1000}
+      FL_GID: ${FL_GID:-1000}
+      FL_PANEL_PORT: ${FL_PANEL_PORT:-5701}
+      FL_ONEBOT_PORT: ${FL_ONEBOT_PORT:-5760}
+      SCREEN: ${SCREEN:-1920x1080x16}
+    ports:
+      - "${VNC_PORT:-5900}:5900"
+      - "${NOVNC_PORT:-6081}:6081"
+      - "${PANEL_HOST_PORT:-5701}:5701"
+      - "${ONEBOT_HOST_PORT:-5760}:5760"
+    volumes:
+      - frishluna-data:/opt/frishluna/app/data
+      - frishluna-qq-config:/app/.config
+      - frishluna-qq-data:/app/.local/share
+
+volumes:
+  frishluna-data:
+  frishluna-qq-config:
+  frishluna-qq-data:

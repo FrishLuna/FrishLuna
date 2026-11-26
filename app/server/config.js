@@ -51,15 +51,24 @@ export function load () {
   let raw = null
   try { raw = JSON.parse(fs.readFileSync(CFG_FILE, 'utf8')) } catch {}
   cache = Object.assign({}, DEFAULTS, raw || {})
+  applyEnv(cache)
   // blockedGroups 允许写成数字/字符串混排，统一成字符串
   cache.blockedGroups = (cache.blockedGroups || []).map((x) => String(x).trim()).filter(Boolean)
   cache.port = Number(cache.port) || DEFAULTS.port
   return cache
 }
 
+// 容器/服务器部署用：环境变量优先于 config.json
+function applyEnv (c) {
+  if (process.env.FL_PANEL_HOST) c.host = process.env.FL_PANEL_HOST
+  if (process.env.FL_PANEL_PORT) c.port = Number(process.env.FL_PANEL_PORT) || c.port
+  if (process.env.FL_ONEBOT_PORT) c.obServerPort = Number(process.env.FL_ONEBOT_PORT) || c.obServerPort
+}
+
 export function save (patch) {
   const cur = load()
   const next = Object.assign({}, cur, patch || {})
+  applyEnv(next)
   next.blockedGroups = (next.blockedGroups || []).map((x) => String(x).trim()).filter(Boolean)
   next.port = Number(next.port) || DEFAULTS.port
   ensureDirs()

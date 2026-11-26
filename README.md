@@ -133,6 +133,22 @@ LD_PRELOAD=$PWD/payload/libfrishluna-payload.so qq
 对已经在跑的 QQ 也可以事后注入：`python3 injector/linux/inject.py --pid <pid> --lib payload/libfrishluna-payload.so`。
 通道是 unix domain socket，`FL_RUNTIME_DIR` 要与面板一致。细节、systemd 单元与排障见 [docs/linux.md](docs/linux.md)。
 
+### Docker（推荐服务器部署）
+
+一条命令起全套（内置官方 Linux QQ + 虚拟桌面扫码 + 面板 + OneBot），不装 QQ 不装 Node：
+
+```bash
+docker run -d --name frishluna --shm-size 1gb \
+  --cap-add SYS_PTRACE --security-opt seccomp=unconfined \
+  -p 5701:5701 -p 5760:5760 -p 6081:6081 \
+  -v frishluna-data:/opt/frishluna/app/data \
+  ghcr.io/FrishLuna/FrishLuna:latest
+```
+
+浏览器打开 `http://localhost:6081` 扫码登录 QQ，`http://localhost:5701` 进面板。
+Windows / macOS 装 Docker Desktop 后同一命令可用。详见 [docs/docker.md](docs/docker.md)。
+
+
 面板默认 `http://127.0.0.1:5701`，端口被占自动 +1。
 
 ## 控制台

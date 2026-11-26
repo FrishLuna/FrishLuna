@@ -1,0 +1,70 @@
+name: docker-image
+
+# 构建内置 QQ 的容器镜像并推到 GHCR。
+# 手动触发（指定已有 Release tag）或发布 Release 后自动跟一发。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要打包的 Release 标签（例如 v0.1.1）'
+        required: true
+      platforms:
+        description: '目标平台（默认 linux/amd64）'
+        required: false
+        default: 'linux/amd64'
+      push:
+        description: '构建后是否推送（false 仅验证构建）'
+        required: false
+        default: 'true'
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 确定版本标签
+        id: tag
+        run: |
+          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          # 发布资产命名不带 v 前缀：FrishLuna-0.1.1-linux-x64.zip
+          echo "ver=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 下载发布包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ steps.tag.outputs.tag }}" --repo "${{ github.repository }}" \
+            --pattern "FrishLuna-${{ steps.tag.outputs.ver }}-linux-x64.zip" \
+            --output docker/frishluna-linux-x64.zip --clobber
+          ls -la docker/
+
+      - name: 登录 GHCR
+        if: ${{ github.event.inputs.push != 'false' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: ./docker
+          platforms: ${{ github.event.inputs.platforms || 'linux/amd64' }}
+          push: ${{ github.event.inputs.push != 'false' }}
+          load: ${{ github.event.inputs.push == 'false' }}
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
