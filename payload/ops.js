@@ -985,7 +985,7 @@
     if (!fs || !path || typeof process === 'undefined' || !process.mainModule) return null
     var dir = (typeof __fl_dir === 'string') ? __fl_dir : ''
     if (!dir) return null
-    var mod = path.resolve(dir + 'native/frishluna-pkt.node')
+    var mod = path.resolve(dir, 'native', 'frishluna-pkt.node')
     try { if (!fs.existsSync(mod)) return null } catch (e) { return null }
     try {
       globalThis.__fl_napi2native = process.mainModule.require(mod)

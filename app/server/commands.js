@@ -1,6 +1,6 @@
 import { load } from './config.js'
 
-export const VERSION = '0.2.0'
+export const VERSION = '0.1.1'
 
 function fmtUptime (sec) {
   const d = Math.floor(sec / 86400)

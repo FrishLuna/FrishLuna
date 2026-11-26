@@ -14,6 +14,20 @@
     catch (e) { return 'ERR:' + (e && e.message ? e.message : String(e)); }
   }
 
+  /* 平台路径：Windows 上是 \，Linux/macOS 上是 / —— 以前这里硬编码反斜杠，
+     Linux 上拼出过 payloadops.js 这种路径 */
+  var SEPS = (typeof process !== 'undefined' && process.platform === 'win32') ? '\\' : '/'
+  function joinPath (dir, name) {
+    if (!dir) return name
+    var last = dir.slice(-1)
+    return dir + (last === '/' || last === '\\' ? '' : SEPS) + name
+  }
+  function wrapPath () {
+    var r = safe(function () { return process.resourcesPath; })
+    if (!r || typeof r !== 'string') return null
+    return joinPath(joinPath(r, 'app'), 'wrapper.node')
+  }
+
   var req = null, reqFrom = 'none';
   if (typeof require === 'function') { req = require; reqFrom = 'local'; }
   else if (typeof globalThis.require === 'function') { req = globalThis.require; reqFrom = 'global'; }
@@ -33,7 +47,7 @@
 
   var wrap = globalThis.__fl_wrap || null;
   if (!wrap && req) {
-    wrap = safe(function () { return req(process.resourcesPath + '\\app\\wrapper.node'); });
+    wrap = safe(function () { return (wrapPath() ? req(wrapPath()) : null); });
     if (typeof wrap === 'string') { emit({ evt: 'wrap-err', e: wrap.slice(0, 200) }); wrap = null; }
   }
   if (wrap) globalThis.__fl_wrap = wrap;
@@ -222,7 +236,7 @@
     var W = globalThis.__fl_wrap
     /* 早期注入（挂起）时 wrapper.node 可能还没被主进程 require，这里懒加载补上 */
     if (!W && req) {
-      var t = safe(function () { return req(process.resourcesPath + '\\app\\wrapper.node') })
+      var t = safe(function () { return (wrapPath() ? req(wrapPath()) : null) })
       if (t && typeof t === 'object') { globalThis.__fl_wrap = W = t }
     }
     if (!W || !W.NodeIQQNTWrapperSession) return null
@@ -265,7 +279,7 @@
   function hookStartup () {
     var W = globalThis.__fl_wrap
     if (!W && req) {
-      var t = safe(function () { return req(process.resourcesPath + '\\app\\wrapper.node') })
+      var t = safe(function () { return (wrapPath() ? req(wrapPath()) : null) })
       if (t && typeof t === 'object') { globalThis.__fl_wrap = W = t }
     }
     if (!W || !W.NodeIQQNTStartupSessionWrapper) return false
@@ -369,7 +383,7 @@
 
   /* 实验台功能表（ops.js）：注册 __fl_ops，供 host 的 /api/lab/invoke 调用 */
   try {
-    if (dir0 && req) (0, eval)(req('fs').readFileSync(dir0 + 'ops.js', 'utf8'))
+    if (dir0 && req) (0, eval)(req('fs').readFileSync(joinPath(dir0, 'ops.js'), 'utf8'))
     else emit({ evt: 'ops-skip', why: 'no fs' })
   } catch (e) {
     emit({ evt: 'ops-load-err', e: String(e && e.message ? e.message : e) })
@@ -377,21 +391,21 @@
 
   /* 富媒体（media.js）：图片上传与发送，ops 里的 sendImage 转发到这里 */
   try {
-    if (dir0 && req) (0, eval)(req('fs').readFileSync(dir0 + 'media.js', 'utf8'))
+    if (dir0 && req) (0, eval)(req('fs').readFileSync(joinPath(dir0, 'media.js'), 'utf8'))
   } catch (e) {
     emit({ evt: 'media-load-err', e: String(e && e.message ? e.message : e) })
   }
 
   /* 合并转发（longmsg.js）：自带 protobuf/裸包收发，注册 OPS.forwardUpload/forwardFetch */
   try {
-    if (dir0 && req) (0, eval)(req('fs').readFileSync(dir0 + 'longmsg.js', 'utf8'))
+    if (dir0 && req) (0, eval)(req('fs').readFileSync(joinPath(dir0, 'longmsg.js'), 'utf8'))
   } catch (e) {
     emit({ evt: 'longmsg-load-err', e: String(e && e.message ? e.message : e) })
   }
 
   /* Qzone 凭据 + AI 语音（qzone.js）：OIDB Buffer 通道，注册 OPS.oidbClientKey/oidbPskey/aiVoiceList/aiVoice */
   try {
-    if (dir0 && req) (0, eval)(req('fs').readFileSync(dir0 + 'qzone.js', 'utf8'))
+    if (dir0 && req) (0, eval)(req('fs').readFileSync(joinPath(dir0, 'qzone.js'), 'utf8'))
   } catch (e) {
     emit({ evt: 'qzone-load-err', e: String(e && e.message ? e.message : e) })
   }
@@ -400,14 +414,14 @@
     if (!globalThis.__fl_session) return
     clearInterval(ibTimer)
     try {
-      if (dir0 && req) (0, eval)(req('fs').readFileSync(dir0 + 'inbound.js', 'utf8'))
+      if (dir0 && req) (0, eval)(req('fs').readFileSync(joinPath(dir0, 'inbound.js'), 'utf8'))
       else emit({ evt: 'inbound-skip', why: 'no fs' })
     } catch (e) {
       emit({ evt: 'inbound-load-err', e: String(e && e.message ? e.message : e) })
     }
     /* 非消息事件观察层：成员/文件/精华/申请等推送 */
     try {
-      if (dir0 && req) (0, eval)(req('fs').readFileSync(dir0 + 'watch.js', 'utf8'))
+      if (dir0 && req) (0, eval)(req('fs').readFileSync(joinPath(dir0, 'watch.js'), 'utf8'))
     } catch (e) {
       emit({ evt: 'watch-load-err', e: String(e && e.message ? e.message : e) })
     }
@@ -432,7 +446,7 @@
       } else if (o.cmd === 'reload') {
         if (!req) { emit({ evt: 'reload-no-fs' }); return; }
         var fs = req('fs');
-        var p = o.path || ((safe(function () { return __fl_dir; }) || '') + 'bridge.js');
+        var p = o.path || (joinPath(safe(function () { return __fl_dir; }) || '', 'bridge.js'));
         var src = fs.readFileSync(p, 'utf8');
         /* 旧轮询闭包指向旧 handle，必须停掉重建，否则新命令分支不生效 */
         if (globalThis.__fl_poll_timer) {
@@ -467,12 +481,12 @@
         } catch (e) {
           globalThis.__fl10 = null;
           emit({ evt: 'reload-err', e: String(e && e.message ? e.message : e) });
-          try { (0, eval)(fs.readFileSync((safe(function () { return __fl_dir; }) || '') + 'bridge.js', 'utf8')); } catch (e2) {
+          try { (0, eval)(fs.readFileSync(joinPath(safe(function () { return __fl_dir; }) || '', 'bridge.js'), 'utf8')); } catch (e2) {
             emit({ evt: 'reload-fatal', e: String(e2 && e2.message ? e2.message : e2) });
           }
         }
-        if (globalThis.__fl_session) { try { (0, eval)(req('fs').readFileSync((safe(function () { return __fl_dir; }) || '') + 'inbound.js', 'utf8')); } catch (e) {} }
-        if (globalThis.__fl_session) { try { (0, eval)(req('fs').readFileSync((safe(function () { return __fl_dir; }) || '') + 'watch.js', 'utf8')); } catch (e) {} }
+        if (globalThis.__fl_session) { try { (0, eval)(req('fs').readFileSync(joinPath(safe(function () { return __fl_dir; }) || '', 'inbound.js'), 'utf8')); } catch (e) {} }
+        if (globalThis.__fl_session) { try { (0, eval)(req('fs').readFileSync(joinPath(safe(function () { return __fl_dir; }) || '', 'watch.js'), 'utf8')); } catch (e) {} }
         emit({ evt: 'reload-ok', bytes: src.length });
       } else if (o.cmd === 'hb') {
         emit({ evt: 'hb', manual: true });

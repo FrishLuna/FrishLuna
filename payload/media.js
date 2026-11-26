@@ -135,7 +135,7 @@
       try {
         var p = nodeReq('path')
         var dir = typeof __fl_dir === 'string' ? __fl_dir : ''
-        if (p && dir) hm = process.mainModule.require(p.resolve(dir + 'native/frishluna-pkt.node'))
+        if (p && dir) hm = process.mainModule.require(p.resolve(dir, 'native', 'frishluna-pkt.node'))
       } catch (e) {}
     }
     if (!hm || typeof hm.takeRsp !== 'function') return null

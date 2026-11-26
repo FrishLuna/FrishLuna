@@ -12,7 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7aa2ff.svg" alt="License: MIT"></a>
   <a href="https://github.com/FrishLuna/FrishLuna/releases/latest"><img src="https://img.shields.io/badge/release-v0.1.0-a78bfa.svg" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-5b8def.svg" alt="Platform">
+  <img src="https://img.shields.io/badge/platform-Windows%20%2F%20Linux-5b8def.svg" alt="Platform: Windows / Linux">
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2022-3c873a.svg" alt="Node">
   <img src="https://img.shields.io/badge/runtime%20deps-0-4fd1a5.svg" alt="Zero runtime dependencies">
   <img src="https://img.shields.io/badge/protocol-OneBot%20v11-a78bfa.svg" alt="OneBot v11">
@@ -89,7 +89,14 @@ Node 面板    ← 业务与展示：op → kernel.call → {cmd:'op'} → 命�
 
 ## 快速开始
 
-**环境**：Windows 10 / 11（x64）、Node ≥ 22（面板用内置 `node:sqlite`，20 及以下会直接起不来）、QQNT 版 QQ（已登录）。
+**环境**：Node ≥ 22（面板用内置 `node:sqlite`，20 及以下会直接起不来）、QQNT 版 QQ（已登录）。
+
+| 平台 | 包名 | 状态 |
+|---|---|---|
+| Windows 10 / 11 x64 | `FrishLuna-<版本>-windows-x64.zip` | 主力平台，功能完整 |
+| Linux x86_64 | `FrishLuna-<版本>-linux-x64.zip` | 可运行，**尚未在真实 Linux 版 QQ 上验收**，见 [docs/linux.md](docs/linux.md) |
+
+### Windows
 
 ```text
 1. 双击 app\启动 FrishLuna.vbs
@@ -108,6 +115,23 @@ Node 面板    ← 业务与展示：op → kernel.call → {cmd:'op'} → 命�
 探测真实端口（端口顺延也能识别），服务不在就静默拉起，日志在 `app\data\keepalive.log`。
 也可以直接 `node tools/keepalive.mjs`；想要无控制台窗口的启动器，用
 `tools/keepalive-host.c` 自行编译（仓库不提供预编译二进制）。
+
+### Linux
+
+```bash
+unzip FrishLuna-<版本>-linux-x64.zip && cd FrishLuna-<版本>-linux-x64
+chmod +x app/start.sh
+./app/start.sh
+```
+
+首次启动会印出初始令牌；日常启动 QQ 时带上载荷：
+
+```bash
+LD_PRELOAD=$PWD/payload/libfrishluna-payload.so qq
+```
+
+对已经在跑的 QQ 也可以事后注入：`python3 injector/linux/inject.py --pid <pid> --lib payload/libfrishluna-payload.so`。
+通道是 unix domain socket，`FL_RUNTIME_DIR` 要与面板一致。细节、systemd 单元与排障见 [docs/linux.md](docs/linux.md)。
 
 面板默认 `http://127.0.0.1:5701`，端口被占自动 +1。
 
@@ -201,8 +225,8 @@ curl -s -X POST http://127.0.0.1:5760/get_forward_msg \
 ```text
 双击 → Node 面板(127.0.0.1:5701) → REST / SSE
      → 业务 op → kernel.call → {cmd:'op',name,args,seq}
-     → \\.\pipe\frishluna.<qqPid>.cmd → payload/ops.js（QQ 进程内执行）
-     ← \\.\pipe\frishluna.<qqPid>.evt ← 回执 / 入站消息 / 内核事件
+     → 命名管道(Windows) / unix socket(Linux) → payload/ops.js（QQ 进程内执行）
+     ← 回执 / 入站消息 / 内核事件
      ↔ 同一批事件经内置 OneBot v11 推给本机订阅方
 ```
 
@@ -220,7 +244,9 @@ curl -s -X POST http://127.0.0.1:5760/get_forward_msg \
 
 ## 已知限制
 
-- 只支持 Windows + QQNT 客户端，随客户端版本更新可能失效。
+- 支持 Windows 与 Linux 的 QQNT 客户端，随客户端版本更新可能失效。
+- Linux 侧目前只验证到「载荷注入 + 通道往返 + 面板联动」，真实 QQ 上的收发消息、媒体上传还没跑过（见 [docs/linux.md](docs/linux.md)）。
+- Linux 没有 `pkt` 原生模块（那是 Windows 版 wrapper.node 的 RVA hook），依赖它的个别动作会自动降级。
 - 自己发的消息没有事件回显，需要靠发送回执或历史消息自取。
 - 合并转发节点内目前支持文字、@、表情；图片等富媒体会以占位文本呈现。
 - 群搜索、成员搜索、商城表情面板尚未打通。

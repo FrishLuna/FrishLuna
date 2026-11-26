@@ -26,7 +26,7 @@ EXTRAS = {
     ],
     'linux-x64': [
         'payload/libfrishluna-payload.so',
-        'payload/native/libfrishluna-pkt.so',
+        # pkt 模块是 wrapper.node 的 RVA hook，Linux 侧没有对应偏移表，不随包分发
     ],
 }
 
@@ -54,6 +54,8 @@ def main():
     ap.add_argument('--platform', required=True, choices=sorted(EXTRAS))
     ap.add_argument('--version', default='')
     ap.add_argument('--out-dir', default=os.path.join(ROOT, '..', 'tmp', 'release'))
+    ap.add_argument('--bin-dir', default=os.environ.get('FL_BIN_DIR', ROOT),
+                    help='编译产物所在目录（默认本仓库；产物不入库时指向实际构建树）')
     ap.add_argument('--allow-dirty', action='store_true')
     a = ap.parse_args()
 
@@ -73,17 +75,18 @@ def main():
     out = os.path.join(a.out_dir, name + '.zip')
 
     files = [p for p in tracked_files() if p not in SKIP]
+    bin_dir = os.path.abspath(a.bin_dir)
     missing = []
     for extra in EXTRAS[a.platform]:
-        if os.path.isfile(os.path.join(ROOT, extra)):
+        if os.path.isfile(os.path.join(bin_dir, extra.replace('/', os.sep))):
             files.append(extra)
         else:
             missing.append(extra)
     if missing:
-        print('[!!] 缺少编译产物：')
+        print('[!!] 缺少编译产物（在 %s 下找）：' % bin_dir)
         for m in missing:
             print('   ', m)
-        print('   先编译（Windows: tools/build-payload.sh，Linux: payload/native/build_linux.sh）')
+        print('   先编译；产物不在本仓库时用 --bin-dir 指过去')
         return 3
 
     seen = set()
@@ -93,6 +96,8 @@ def main():
                 continue
             seen.add(rel)
             src = os.path.join(ROOT, rel.replace('/', os.sep))
+            if not os.path.isfile(src):
+                src = os.path.join(bin_dir, rel.replace('/', os.sep))
             if not os.path.isfile(src):
                 continue
             # 可执行位必须保留：Linux 下的 .sh / inject.py

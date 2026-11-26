@@ -1209,7 +1209,9 @@ function printBanner (url, cfg, boot) {
     boot && onTty
       ? '   初始令牌只打印这一次：登录后立刻设置你自己的令牌，它即刻作废'
       : boot
-        ? '   初始令牌已生成但输出被重定向：双击 app\\前台运行.cmd 重看一次'
+        ? (process.platform === 'win32'
+          ? '   初始令牌已生成但输出被重定向：双击 app/前台运行.cmd 重看一次'
+          : '   初始令牌已生成但输出被重定向：用 app/start.sh 前台启动重看一次')
         : '   令牌不可回显：忘了就删掉 .env 里 FL_AUTH_* 那几行再重启，会重新生成初始令牌',
     ''
   ].join('\n')
