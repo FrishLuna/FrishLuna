@@ -31,6 +31,28 @@ EXTRAS = {
 }
 
 # 源码里有、但发布包里不要的（开发辅助，用户用不上）
+# 平台专属的启动器：别把 Windows 的 vbs/cmd 塞进 Linux 包，反之亦然
+SKIP_BY_PLATFORM = {
+    'linux-x64': [
+        'app/启动 FrishLuna.vbs',
+        'app/前台运行.cmd',
+        'app/停止面板.cmd',
+    ],
+    'windows-x64': [
+        'app/start.sh',
+        'app/stop.sh',
+    ],
+}
+
+# 解压即用：这些文件必须带可执行位。Windows 文件系统上读不到权限位，
+# 所以按名单强制给，不能依赖 os.stat
+EXEC_ALWAYS = {
+    'app/start.sh',
+    'app/stop.sh',
+    'injector/linux/inject.py',
+    'payload/native/build_linux.sh',
+}
+
 SKIP = [
     'injector/msf.js',
     'injector/online2.js',
@@ -74,7 +96,8 @@ def main():
     os.makedirs(a.out_dir, exist_ok=True)
     out = os.path.join(a.out_dir, name + '.zip')
 
-    files = [p for p in tracked_files() if p not in SKIP]
+    drop = set(SKIP) | set(SKIP_BY_PLATFORM.get(a.platform, []))
+    files = [p for p in tracked_files() if p not in drop]
     bin_dir = os.path.abspath(a.bin_dir)
     missing = []
     for extra in EXTRAS[a.platform]:
@@ -102,9 +125,12 @@ def main():
                 continue
             # 可执行位必须保留：Linux 下的 .sh / inject.py
             st = os.stat(src)
-            mode = 0o755 if (st.st_mode & 0o111) else 0o644
+            mode = 0o755 if (rel in EXEC_ALWAYS or (st.st_mode & 0o111)) else 0o644
             info = zipfile.ZipInfo(f'{name}/{rel}', date_time=(2026, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
+            # create_system 必须标成 Unix(3)：在 Windows 上打包默认写 0(MS-DOS)，
+            # Linux 的 unzip 会因此忽略权限位，解压出来的 .sh 全是 644
+            info.create_system = 3
             info.external_attr = (0o100000 | mode) << 16
             with open(src, 'rb') as f:
                 z.writestr(info, f.read())
