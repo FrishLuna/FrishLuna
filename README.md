@@ -65,7 +65,7 @@ FrishLuna 给正在运行的 QQNT 客户端做一台"旁挂式"控制台：不�
 | **社交** | 好友列表与申请处理、备注、删除、资料查询、点赞、戳一戳、自定义在线状态、名片赞 | `get_friend_list` `set_friend_add_request` `send_poke` `get_profile_like` `set_diy_online_status` |
 | **空间** | 说说发布 / 删除 / 列表 / 详情、点赞、评论、可见范围、上传图片、空间封禁状态 | `publish_qzone_msg` `like_qzone` `comment_qzone` `get_qzone_feeds` |
 | **AI 语音** | 角色列表、文字转语音、直接发进群 | `get_ai_characters` `send_group_ai_record` |
-| **协议** | OneBot v11：HTTP action、正向 WS、反向 WS（手写 RFC6455 客户端）；cookie / bkn / 凭证读取 | `get_cookies` `get_csrf_tokens` `get_credentials` |
+| **协议** | OneBot v11：HTTP action、正向 WS、反向 WS（手写 RFC6455 客户端）；本机 cookie / bkn 凭证只读（调试用途，仅限自有账号） | `get_cookies` `get_csrf_tokens` `get_credentials` |
 
 所有能力默认**只监听本机、只对持有访问令牌的操作者开放**；发送侧支持群号白名单，
 收消息与发消息分开控制。
@@ -83,7 +83,7 @@ Node 面板    ← 业务与展示：op → kernel.call → {cmd:'op'} → 命�
 外部机器人   ← 内置 OneBot v11：事件推送与 action 调用
 ```
 
-- **旁挂而非替换**：不修改 `application.asar`，不动 Electron 入口，绕开完整性校验。
+- **旁挂而非替换**：不修改 `application.asar`，不动 Electron 入口，不触碰安装目录。
 - **零 npm 运行时依赖**：HTTP、SSE、WebSocket（含 RFC6455 握手与帧编解码）全部手写。
 - **一个出口**：面板与协议端都走 `kernel.call`，动作实现只有一份，行为不会分叉。
 
@@ -324,7 +324,7 @@ docs/EULA.md                   可接受使用条款
 
 源代码以 [MIT](LICENSE) 许可证开源。使用层面的免责声明与可接受使用条款见
 [docs/EULA.md](docs/EULA.md)，第三方组件与运行时域名说明见 [NOTICE](NOTICE)。
-仓库不包含腾讯专有源码、反编译产物、内部接口表或测试报告；实现依据的接口行为是在自有设备上
+仓库不包含腾讯专有源码或反编译产物；实现依据的接口行为是在自有设备上
 按互操作目的取得的，功能可能随 QQ 版本更新失效。
 
 ---

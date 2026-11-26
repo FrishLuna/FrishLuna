@@ -7,7 +7,7 @@
  *     字符串再入库，二进制 (OIDB envelope) 含非法 UTF-8 序列时被 V8 替换成 U+FFFD，
  *     服务端解不开 → 145 "[oidb] invalid pkg and decode req failed"。
  *     这就是 JS 层 sendSsoCmdReqByContend 必挂 145 的根因。
- *   修法：Buffer 参数时绕过 coerce，用 QQ 自己的 resize(RVA 版本表) 分配
+ *   修法：Buffer 参数时绕过 coerce，用 QQ 自己的 resize（按版本实测）分配
  *     QQ 自定义字符串 (24B: byte0=flag, bit0=长标志; 短串 data=+1 len=flag>>1,
  *     长串 len=+8 ptr=+0x10)，memcpy 原始字节，长度语义与 QQ 完全一致。
  *     非 Buffer 参数一律回落原函数（trampoline），除 Buffer 外行为零变化。
@@ -24,7 +24,7 @@
  *     只搬移位置无关的序言指令（push/sub rsp/lea rsp 相对寻址），遇到
  *     rip 相对寻址或未知指令直接拒绝安装（宁可失败不猜）。
  *
- *   版本 RVA（wrapper.node，逐版本逆向得出）：
+ *   版本 RVA（wrapper.node，按版本实测定位）：
  *     9.9.36-53644: send=C3EE2F recv=24A6355 resize=77DE00
  *     9.9.37-54395: send=C5927F recv=24CC2B5 resize=78F800（字节级模式匹配）
  *

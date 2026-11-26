@@ -952,7 +952,7 @@
    * send hook 绕过 coerce 用 QQ 自己的 resize 直写原始字节；recv hook 在回执对象上
    * 补一个 napi_create_buffer_copy 的 rspbuffer（字节无损）。hook 本体是
    * 14 字节 detour + trampoline，无第三方二进制。
-   * WRAPPER_OFFSETS 是各版本 wrapper.node 的偏移表（send/recv 函数偏移 + resize 偏移），
+   * WRAPPER_OFFSETS 是各版本 wrapper.node 上三个函数的实测位置（send/recv/resize），
    * 版本不匹配时 initHook 直接拒绝。 */
   var WRAPPER_OFFSETS = {
     '9.9.36-53644-x64': { send: 'C3EE2F', recv: '24A6355', resize: '77DE00' },
