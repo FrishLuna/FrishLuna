@@ -56,6 +56,10 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
+      - name: 规范镜像名（GHCR 要求全小写）
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - name: 构建并推送
         uses: docker/build-push-action@v6
         with:
@@ -64,7 +68,7 @@ jobs:
           push: ${{ github.event.inputs.push != 'false' }}
           load: ${{ github.event.inputs.push == 'false' }}
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.tag.outputs.tag }}
+            ${{ steps.image.outputs.name }}:latest
+            ${{ steps.image.outputs.name }}:${{ steps.tag.outputs.ver }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
