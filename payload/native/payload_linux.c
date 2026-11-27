@@ -372,7 +372,9 @@ static int listen_sock (const char *path) {
   return fd;
 }
 
-static void start_server (void) {
+/* 解析运行目录并建好。构造期和 start_server 都要用，做成幂等 */
+static void resolve_runtime (void) {
+  if (g_runtime[0]) return;
   const char *rt = getenv("FL_RUNTIME_DIR");
   if (!rt || !rt[0]) {
     const char *xdg = getenv("XDG_RUNTIME_DIR");
@@ -383,6 +385,40 @@ static void start_server (void) {
   }
   mkdir(g_runtime, 0700);
   chmod(g_runtime, 0700);
+}
+
+/* 抢「主进程名额」：运行目录里只允许一个进程建 socket。
+ * 光看命令行不够——QQ 启动早期会拉起几个既没有 --type= 、可执行文件又是 qq 的短命进程，
+ * 它们建完 socket 就退出，socket 就变成死节点。用锁文件记第一个成功占位的 pid，
+ * 后来者发现持有者还活着就让位；持有者死了（supervisor 重启主进程）才由新进程接管。 */
+static int claim_host_slot (void) {
+  char lp[PATH_MAX + 64];
+  snprintf(lp, sizeof(lp), "%s/frishluna-owner.pid", g_runtime);
+
+  for (int attempt = 0; attempt < 2; attempt++) {
+    int fd = open(lp, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (fd >= 0) {
+      char b[32];
+      int n = snprintf(b, sizeof(b), "%d", (int)getpid());
+      if (n > 0) { ssize_t w = write(fd, b, (size_t)n); (void)w; }
+      close(fd);
+      return 1;
+    }
+    int ofd = open(lp, O_RDONLY);
+    if (ofd < 0) return 0;
+    char b[32];
+    memset(b, 0, sizeof(b));
+    ssize_t n = read(ofd, b, sizeof(b) - 1);
+    close(ofd);
+    int holder = (n > 0) ? atoi(b) : 0;
+    if (holder > 0 && kill(holder, 0) == 0) return 0; /* 主进程还在，让位 */
+    unlink(lp); /* 持有者已死，清掉重抢 */
+  }
+  return 0;
+}
+
+static void start_server (void) {
+  resolve_runtime();
   cleanup_stale_sockets();
 
   char pe[PATH_MAX + 64], pc[PATH_MAX + 64];
@@ -1076,8 +1112,13 @@ __attribute__((constructor)) static void fl_ctor (void) {
 
   /* 子进程（渲染 / GPU / zygote / crashpad）不参与：不建 socket 也不装 hook。
    * 否则多出来的 socket 会在子进程退出后变成死节点，面板连上去只会无限重连。 */
+  resolve_runtime();
   if (!is_host_process()) {
     plog("[ctor] 非主进程，跳过（pid=%d）", (int)getpid());
+    return;
+  }
+  if (!claim_host_slot()) {
+    plog("[ctor] 运行目录已有主进程，跳过（pid=%d）", (int)getpid());
     return;
   }
 
