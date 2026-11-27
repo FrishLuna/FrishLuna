@@ -3,10 +3,6 @@
 ARG NODE_VERSION=22
 FROM node:${NODE_VERSION}-bookworm-slim
 
-ARG QQ_VERSION=3.2.28-48517
-ARG QQ_CHANNEL=f9cbaab2
-ARG QQ_BASE_URL=https://dldir1v6.qq.com/qqfile/qq/QQNT
-
 ENV DEBIAN_FRONTEND=noninteractive \
     VNC_PASSWD=vncpasswd \
     TZ=Asia/Shanghai \
@@ -27,10 +23,13 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-      aria2 \
       ca-certificates \
       curl \
+      mawk \
+      gcc \
+      libc6-dev \
       dbus-user-session \
+      desktop-file-utils \
       ffmpeg \
       fluxbox \
       fonts-wqy-zenhei \
@@ -61,19 +60,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
+COPY fetch-qq.sh /root/fetch-qq.sh
+
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     set -eux; \
     qq_arch="$(dpkg --print-architecture)"; \
     case "${qq_arch}" in \
-      amd64) deb_arch=amd64 ;; \
-      arm64) deb_arch=arm64 ;; \
+      amd64|arm64) deb_arch="${qq_arch}" ;; \
       *) echo "Unsupported architecture: ${qq_arch}" >&2; exit 1 ;; \
     esac; \
+    bash /root/fetch-qq.sh "${deb_arch}" /tmp/linuxqq.deb && \
     apt-get update && \
-    aria2c --check-certificate=false -x16 -s16 -o /tmp/linuxqq.deb "${QQ_BASE_URL}/${QQ_CHANNEL}/linuxqq_${QQ_VERSION}_${deb_arch}.deb" && \
     (dpkg -i /tmp/linuxqq.deb || apt-get -f install -y --no-install-recommends) && \
-    rm -f /tmp/linuxqq.deb && \
+    rm -f /tmp/linuxqq.deb /root/fetch-qq.sh && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -93,6 +93,7 @@ RUN set -eux; \
     mv /tmp/frishluna-pkg/*/injector /opt/frishluna/injector 2>/dev/null || true; \
     test -f /opt/frishluna/app/start.sh && \
     test -f /opt/frishluna/app/server/index.js && \
+    bash /opt/frishluna/payload/native/build_linux.sh && \
     test -f /opt/frishluna/payload/libfrishluna-payload.so && \
     chmod +x /opt/frishluna/app/start.sh && \
     rm -rf /tmp/frishluna.zip /tmp/frishluna-pkg && \
