@@ -30,6 +30,9 @@ chmod 700 "${XDG_RUNTIME_DIR}"
 
 # 容器重启后可能残留失效的 socket 节点，先清掉避免误判
 find "${FL_RUNTIME_DIR}" -maxdepth 1 -type s -name 'frishluna-*.sock' -delete 2>/dev/null || true
+# 主进程占位锁也要清：容器重启后 pid 会被复用（旧 pid 落到别的进程上），
+# 留着会让新启动的 QQ 误判「主进程还在」而主动让位，一个 socket 都不建
+rm -f "${FL_RUNTIME_DIR}/frishluna-owner.pid"
 
 x11vnc -storepasswd "${VNC_PASSWD}" /root/.vnc/passwd >/dev/null
 
