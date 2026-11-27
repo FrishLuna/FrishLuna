@@ -22,20 +22,23 @@
   /* 200 × 500ms = 100 秒；单测可用 globalThis.__fl_inbound_max_tries 调小 */
   var MAX_TRIES = (typeof globalThis.__fl_inbound_max_tries === 'number' && globalThis.__fl_inbound_max_tries > 0)
     ? globalThis.__fl_inbound_max_tries
-    : 200
+    : 1800
   var tries = 0
+  var warned = false
+  /* 不设「放弃」：扫码登录可能比 100 秒慢得多，早放弃会让收消息能力永久丢失。
+     等太久只打一条警告，轮询继续（每 500ms 一次，开销可忽略）。 */
   var timer = setInterval(function () {
     tries++
     var s = globalThis.__fl_session
     if (!s) {
-      if (tries > MAX_TRIES) { clearInterval(timer); giveUp('no session') }
+      if (!warned && tries > MAX_TRIES) { warned = true; err('wait', 'session 迟迟未出现，继续等待（不放弃）') }
       return
     }
 
     var ms = null
     try { ms = s.getMsgService() } catch (e) { }
     if (!ms) {
-      if (tries > MAX_TRIES) { clearInterval(timer); giveUp('msg service is nullptr') }
+      if (!warned && tries > MAX_TRIES) { warned = true; err('wait', '消息服务迟迟未就绪，继续等待（不放弃）') }
       return
     }
 

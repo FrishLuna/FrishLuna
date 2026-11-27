@@ -13,6 +13,9 @@ app/data/
 *.log
 *.bak
 *.bak-*
+
+# 临时调试脚本
+tmp/
 *.bak_*
 *.backup-*
 

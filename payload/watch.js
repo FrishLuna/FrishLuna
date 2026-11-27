@@ -465,17 +465,22 @@
     })
   }
 
-  /* 自动挂：session 已有就立刻挂；没有就每 2 秒看一眼（最多 100 秒） */
+  /* 自动挂：session 有了就试着挂，但服务可能还没初始化完（getXxxService 返回 null）。
+     原来只要 session 在就只试一次、失败就永久放弃 —— QQ 启动早期服务未就绪时，
+     收消息能力会整个丢掉。这里改成失败继续等，最多等 5 分钟。 */
   var tries = 0
   var timer = setInterval(function () {
     if (!globalThis.__fl_watch || globalThis.__fl_watch !== W) { clearInterval(timer); return }
     if (W.on) { clearInterval(timer); return }
     if (!globalThis.__fl_session) {
-      if (++tries > 50) clearInterval(timer)
+      if (++tries > 150) clearInterval(timer)
       return
     }
+    try {
+      var r = W.start()
+      if (r === 'ok=0' || r === 'NO_SESSION') { if (++tries > 150) clearInterval(timer); return }
+    } catch (e) { err('start', e); if (++tries > 150) clearInterval(timer); return }
     clearInterval(timer)
-    try { W.start() } catch (e) { err('start', e) }
   }, 2000)
   globalThis.__fl_watch_timer = timer
 })()
