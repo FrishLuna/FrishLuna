@@ -3,6 +3,9 @@
 ARG NODE_VERSION=22
 FROM node:${NODE_VERSION}-bookworm-slim
 
+# 可选 Debian 镜像源（CI 留空用官方源；国内构建可设 mirrors.tuna.tsinghua.edu.cn 加速）
+ARG APT_MIRROR=
+
 ENV DEBIAN_FRONTEND=noninteractive \
     VNC_PASSWD=vncpasswd \
     TZ=Asia/Shanghai \
@@ -10,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FL_PANEL_HOST=0.0.0.0 \
     FL_PANEL_PORT=5701 \
     FL_ONEBOT_PORT=5760 \
+    FL_ONEBOT_HOST=0.0.0.0 \
     FL_RUNTIME_DIR=/tmp/frishluna \
     FL_NO_OPEN=1 \
     FL_UID=1000 \
@@ -22,6 +26,9 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
 
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    if [ -n "${APT_MIRROR}" ]; then \
+      sed -i "s|deb.debian.org|${APT_MIRROR}|g" /etc/apt/sources.list.d/debian.sources; \
+    fi; \
     apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \

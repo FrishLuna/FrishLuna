@@ -16,6 +16,8 @@ export const events = new EventEmitter() // 'event' → 内核产生的 OneBot 1
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const HEARTBEAT_MS = 30000
+/** 监听地址：容器/服务器部署时用 FL_ONEBOT_HOST 覆盖为 0.0.0.0 */
+const LISTEN_HOST = process.env.FL_ONEBOT_HOST || '127.0.0.1'
 
 let httpSrv = null // 旧版单端口监听（兼容保留，新的走 listeners）
 let httpPort = 0 // 旧版单端口（兼容保留）
@@ -1233,7 +1235,7 @@ function applyNet (net) {
   postTargets = netHttpClients.filter((e) => e.enable !== false)
 }
 
-/* 按当前矩阵重建监听（HTTP 服务 + 正向 WS，全部绑 127.0.0.1） */
+/* 按当前矩阵重建监听（HTTP 服务 + 正向 WS，绑定 LISTEN_HOST） */
 function rebuildListeners () {
   for (const l of listeners) { try { l.srv.close() } catch {} }
   listeners = []
@@ -1243,9 +1245,9 @@ function rebuildListeners () {
       : apiRequestHandler(entry))
     srv.on('upgrade', upgradeHandler(entry))
     srv.once('error', (e) => bus.warn('onebot', entry.name + '（端口 ' + entry.port + '）监听失败: ' + (e.code || e.message)))
-    try { srv.listen(entry.port, '127.0.0.1') } catch {}
+    try { srv.listen(entry.port, LISTEN_HOST) } catch {}
     listeners.push({ kind, entry, srv })
-    bus.ok('onebot', entry.name + ' 已开启 ' + (kind === 'wsServer' ? 'ws' : 'http') + '://127.0.0.1:' + entry.port + (entry.token ? '（有令牌）' : '（未设令牌，仅本机）'))
+    bus.ok('onebot', entry.name + ' 已开启 ' + (kind === 'wsServer' ? 'ws' : 'http') + '://' + LISTEN_HOST + ':' + entry.port + (entry.token ? '（有令牌）' : '（未设令牌，仅本机）'))
   }
   for (const e of netHttpServers) if (e.enable !== false) openOne('httpServer', e)
   for (const e of netWsServers) if (e.enable !== false) openOne('wsServer', e)
