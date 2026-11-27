@@ -7,7 +7,7 @@ set -euo pipefail
 : "${FL_GID:=1000}"
 : "${FL_HOME:=/opt/frishluna}"
 : "${FL_RUNTIME_DIR:=/tmp/frishluna}"
-: "${SCREEN:=1920x1080x16}"
+: "${SCREEN:=1920x1080x24}"
 
 export DISPLAY="${DISPLAY:-:1}"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg-${FL_UID}}"

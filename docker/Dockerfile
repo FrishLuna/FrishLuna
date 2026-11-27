@@ -18,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     FL_NO_OPEN=1 \
     FL_UID=1000 \
     FL_GID=1000 \
-    SCREEN=1920x1080x16 \
+    SCREEN=1920x1080x24 \
     DISPLAY=:1
 
 RUN rm -f /etc/apt/apt.conf.d/docker-clean; \
