@@ -37,6 +37,8 @@
 #include <limits.h>
 #include <sched.h>
 #include <sys/syscall.h>
+#include <dirent.h>
+#include <signal.h>
 
 /* ---------------- N-API 最小声明 ---------------- */
 
@@ -300,6 +302,61 @@ static void *cmd_accept (void *arg) {
   return NULL;
 }
 
+/* 只有 QQ 主进程才建 socket：
+ * LD_PRELOAD 会被 fork/exec 出来的子进程继承，渲染 / GPU / zygote / crashpad 都会跑
+ * 一遍 constructor，各自建一组 socket。子进程一退出，socket 文件就成了死节点，
+ * 面板连上去只会无限「消息服务已断开」。这里提前挡掉，让运行目录里始终只有主进程一套。
+ *
+ * 两条判据同时成立才算主进程：
+ *   1) 可执行文件就是 QQ 主程序（排除 chrome_crashpad_handler 这类伴随进程）
+ *   2) 命令行不含 --type=xxx（Chromium 的子进程都带这个参数，主进程没有）
+ */
+static int is_host_process (void) {
+  char exe[PATH_MAX];
+  ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+  if (n <= 0) return 0;
+  exe[n] = 0;
+  const char *base = strrchr(exe, '/');
+  base = base ? base + 1 : exe;
+  /* crashpad 是 QQ 自带的独立进程，同样继承 LD_PRELOAD，但它不需要 socket */
+  if (strstr(base, "crashpad")) return 0;
+
+  FILE *f = fopen("/proc/self/cmdline", "rb");
+  if (!f) return 1; /* 读不到命令行就按主进程处理，宁可多建也别漏 */
+  char buf[8192];
+  size_t len = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  buf[len] = 0;
+  for (size_t i = 0; i < len;) {
+    const char *arg = buf + i;
+    size_t alen = strlen(arg);
+    if (strncmp(arg, "--type=", 7) == 0) return 0;
+    if (alen == 0) break;
+    i += alen + 1;
+  }
+  return 1;
+}
+
+/* 清掉已经不存在的进程留下的 socket，避免运行目录越堆越脏 */
+static void cleanup_stale_sockets (void) {
+  DIR *d = opendir(g_runtime);
+  if (!d) return;
+  struct dirent *de;
+  int self = (int)getpid();
+  while ((de = readdir(d)) != NULL) {
+    const char *nm = de->d_name;
+    if (strncmp(nm, "frishluna-", 10) != 0) continue;
+    int pid = atoi(nm + 10);
+    if (pid <= 0 || pid == self) continue;
+    if (kill(pid, 0) != 0 && errno == ESRCH) {
+      char p[PATH_MAX + 300];
+      snprintf(p, sizeof(p), "%s/%s", g_runtime, nm);
+      unlink(p);
+    }
+  }
+  closedir(d);
+}
+
 static int listen_sock (const char *path) {
   struct sockaddr_un sa;
   memset(&sa, 0, sizeof(sa));
@@ -326,6 +383,7 @@ static void start_server (void) {
   }
   mkdir(g_runtime, 0700);
   chmod(g_runtime, 0700);
+  cleanup_stale_sockets();
 
   char pe[PATH_MAX + 64], pc[PATH_MAX + 64];
   snprintf(pe, sizeof(pe), "%s/frishluna-%d.evt.sock", g_runtime, (int)getpid());
@@ -1015,6 +1073,13 @@ __attribute__((constructor)) static void fl_ctor (void) {
   plog("[ctor] dir=%s pid=%d", g_self_dir, (int)getpid());
 
   if (__sync_val_compare_and_swap(&g_booted, 0, 1) != 0) return;
+
+  /* 子进程（渲染 / GPU / zygote / crashpad）不参与：不建 socket 也不装 hook。
+   * 否则多出来的 socket 会在子进程退出后变成死节点，面板连上去只会无限重连。 */
+  if (!is_host_process()) {
+    plog("[ctor] 非主进程，跳过（pid=%d）", (int)getpid());
+    return;
+  }
 
   start_server();
   pthread_t t;
