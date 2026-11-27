@@ -519,6 +519,31 @@ function translate (action, params) {
  * @param {number} [timeoutMs=15000]
  * @returns {Promise<{ok:true, ret:string, name:string} | {ok:false, err:string, retcode:number}>}
  */
+/* 私聊发送只认 uid（u_xxx），光给 QQ 号 payload 会直接拒。
+ * 发之前如果 uid 表里没有这个号，就用好友列表补一次，省得用户还要先让对方发消息。 */
+function needsPeerUid (action, p) {
+  if (!p) return false
+  const priv = action === 'send_private_msg' ||
+    (action === 'send_msg' && p.group_id === undefined && p.user_id !== undefined)
+  if (!priv) return false
+  const u = String(p.user_id ?? p.qq ?? '')
+  return !!u && !/^u_/.test(u) && !uidmap.resolve(u).ok
+}
+
+async function seedFriendUidTable (timeoutMs) {
+  try {
+    const r = await callOn(null, 'get_friend_list', {}, timeoutMs)
+    if (!r || !r.ok) return
+    let d = r.ret
+    if (typeof d === 'string') { try { d = JSON.parse(d) } catch { return } }
+    const arr = Array.isArray(d) ? d : (d && (d.list || d.friends || d.data)) || []
+    uidmap.seedFromBuddyList(arr.map((f) => ({
+      user_id: f.user_id ?? f.uin ?? (f.uid ? uidmap.toQq(f.uid) : undefined),
+      uid: f.uid
+    })))
+  } catch { /* 补表失败就让后续按原逻辑报错，别把真实原因盖掉 */ }
+}
+
 export async function call (action, params = {}, timeoutMs = 15000) {
   return callOn(null, action, params, timeoutMs)
 }
@@ -532,6 +557,7 @@ export async function call (action, params = {}, timeoutMs = 15000) {
  */
 export async function callOn (key, action, params = {}, timeoutMs = 15000) {
   start()
+  if (needsPeerUid(action, params)) await seedFriendUidTable(timeoutMs)
   let t
   try {
     t = translate(action, params)

@@ -118,8 +118,14 @@ async function resolveUid (qq) {
     if (r.ok) {
       let d = null
       try { d = typeof r.ret === 'string' ? JSON.parse(r.ret) : r.ret } catch { d = null }
-      const list = Array.isArray(d) ? d : (d && d.friends) || []
-      const hit = list.find((f) => String(f.uin ?? f.user_id) === s)
+      const list = Array.isArray(d) ? d : (d && (d.list || d.friends || d.data)) || []
+      /* 内核有时只回 uid 不回 QQ 号，这时用 uid 反解出 QQ 号再比 */
+      const hit = list.find((f) => {
+        const direct = f.uin ?? f.user_id
+        if (direct && String(direct) === s) return true
+        const decoded = uidmap.toQq(String(f.uid ?? ''))
+        return !!decoded && String(decoded) === s
+      })
       if (hit && hit.uid) return String(hit.uid)
     }
   } catch {}
