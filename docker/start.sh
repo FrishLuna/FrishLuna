@@ -45,7 +45,7 @@ wait_for_xvfb() {
 }
 
 dbus-daemon --config-file=/usr/share/dbus-1/system.conf --print-address &
-Xvfb "${DISPLAY}" -screen 0 "${SCREEN}" &
+Xvfb "${DISPLAY}" -screen 0 "${SCREEN}" +extension GLX +render -noreset &
 XVFB_PID=$!
 wait_for_xvfb
 
