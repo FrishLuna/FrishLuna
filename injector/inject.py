@@ -118,13 +118,18 @@ def main():
 
     code = inject(pid, a.dll)
     print('\n等待 4 秒后检查管道…')
+    pipes = []
     for _ in range(8):
         time.sleep(0.5)
-        pipes = list_pipes('frishluna.')
+        # 只认本次目标 PID 的管道：其他实例/旧进程的 frishluna.* 不算注入成功
+        pipes = [p for p in list_pipes('frishluna.') if f'frishluna.{pid}.' in p]
         if pipes:
             break
     print(f'注入后管道 = {pipes or "(无)"}')
-    return 0 if pipes else 2
+    if not pipes:
+        print(f'[!!] 未检测到目标 PID={pid} 的管道，注入未生效')
+        return 2
+    return 0
 
 
 if __name__ == '__main__':
