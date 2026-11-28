@@ -53,6 +53,10 @@ docker run -d --name frishluna \
 
 镜像内 QQ 以独立用户运行，QQ 登录态落在 `frishluna-qq-*` 两个卷里，与宿主机的 QQ 互不干扰。
 
+## 载荷注入
+
+容器不用 `LD_PRELOAD` 给 QQ 预载载荷：QQ（NT 架构）在启动极早期被注入会在初始化阶段 SIGTRAP 崩溃；而起进程立刻 ptrace 注入又会撞上加载器锁，远端 `dlopen` 永远不返回。因此镜像里由一个常驻迟注入器（`inject-once.sh`，supervisor 的 `inject` 程序，root 运行）负责：发现新的 QQ 主进程后先等 15 秒再注入，失败冷却 20 秒，已注入的自动跳过。注入日志在容器内 `$FL_RUNTIME_DIR/inject.log`。
+
 ## 平台说明
 
 - **Linux**：amd64 与 arm64 都可用（QQ 官方提供双架构 deb）

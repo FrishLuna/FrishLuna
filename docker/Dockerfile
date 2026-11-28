@@ -88,9 +88,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY frishluna-linux-x64.zip /tmp/frishluna.zip
 COPY supervisord.conf /etc/supervisord.conf
 COPY start.sh /root/start.sh
+COPY inject-once.sh /opt/frishluna/inject-once.sh
 
 RUN set -eux; \
-    chmod +x /root/start.sh; \
+    chmod +x /root/start.sh /opt/frishluna/inject-once.sh; \
     groupadd --gid 1001 frishluna && \
     useradd --no-log-init --uid 1001 --gid 1001 --home-dir /app --shell /bin/bash frishluna && \
     mkdir -p /opt/frishluna /app/.cache /app/.config /app/.local/share "${FL_RUNTIME_DIR}" && \
