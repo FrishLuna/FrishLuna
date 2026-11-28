@@ -234,8 +234,18 @@ function shapeRead (action, d, params) {
     case 'get_friend_msg_history':
       return arrOf(d).map((m) => {
         const segs = elemsToSegments(m.elements)
+        /* 历史行也注册进映射表：客户端拿返回的 message_id 就能直接 delete_msg，不必再带群号 */
+        const kid = String(m.msgId ?? '')
+        let mid = kid
+        try {
+          mid = msgid.toOneBotId(kid, {
+            peer: String(params.group_id ?? params.user_id ?? ''),
+            chatType: params.group_id !== undefined ? 2 : 1,
+            account: kernel.getSelfId() ? String(kernel.getSelfId()) : ''
+          })
+        } catch { /* 映射失败回退内核 id，不阻塞历史返回 */ }
         return {
-          message_id: String(m.msgId ?? ''),
+          message_id: mid,
           real_id: String(m.msgSeq ?? ''),
           message: segs,
           raw_message: segsToRaw(segs),
@@ -284,7 +294,7 @@ function waitAiVoiceReceipt (groupId, fileUuid, timeoutMs) {
  *  内嵌字符串）：0x929B 的 node.info.md5 就是语音文件名（<md5>.amr），找 self 发的、
  *  元素里含该 md5 的最新一条，把内核 msgId 注册进映射表返回 OneBot int id。
  *  扫不到返回 null，绝不按「下一条语音」猜。 */
-async function receiptViaHistory (groupId, md5, maxTries) {
+async function receiptViaHistory (groupId, md5, maxTries, account) {
   for (let i = 0; i < (maxTries || 6); i++) {
     const r = await kernel.call('get_group_msg_history', { group_id: groupId, count: 8 }, 15000)
     if (r.ok) {
@@ -295,7 +305,8 @@ async function receiptViaHistory (groupId, md5, maxTries) {
         for (let k = mine.length - 1; k >= 0; k--) {
           const els = typeof mine[k].elements === 'string' ? mine[k].elements : JSON.stringify(mine[k].elements || [])
           if (md5 && String(els).toLowerCase().includes(String(md5).toLowerCase())) {
-            const obId = msgid.toOneBotId(String(mine[k].msgId), { peer: String(groupId), chatType: 2 })
+            /* 映射键按账号前缀隔离：必须带上当前账号，多账号下同名内核 id 才不串 */
+            const obId = msgid.toOneBotId(String(mine[k].msgId), { peer: String(groupId), chatType: 2, account: account ? String(account) : '' })
             return { message_id: obId, kernelId: String(mine[k].msgId) }
           }
         }
@@ -711,7 +722,7 @@ async function handleActionInner (action, params, echo) {
     const gid = num(params.group_id)
     const md5 = d.node && d.node.info && d.node.info.md5
     let receipt = await waitAiVoiceReceipt(gid, uuid, 2500)
-    if (!receipt && md5) receipt = await receiptViaHistory(gid, md5)
+    if (!receipt && md5) receipt = await receiptViaHistory(gid, md5, 0, kernel.getSelfId())
     if (!receipt) {
       return base('failed', 1501, null, `AI 语音已发送进群，但暂未获取到消息确认`)
     }

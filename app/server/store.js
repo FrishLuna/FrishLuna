@@ -115,6 +115,16 @@ export function recentMsgIds (limit = 4096) {
   } catch { return [] }
 }
 
+/** 按内核 msgId 反查最近一次登记的会话与账号（撤回/取消息兜底定位用） */
+export function findMsgIdMeta (kernelId) {
+  if (!load()) return null
+  try {
+    const r = db.prepare('SELECT peer, chat_type AS chatType, account FROM msgids WHERE kernel_id = ? ORDER BY id DESC LIMIT 1')
+      .get(String(kernelId || ''))
+    return r ? { peer: String(r.peer || ''), chatType: Number(r.chatType) || 1, account: String(r.account || '') } : null
+  } catch { return null }
+}
+
 export function saveMessage (m) {
   if (!load()) return false
   try {

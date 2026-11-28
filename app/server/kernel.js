@@ -284,25 +284,37 @@ function translate (action, params) {
         }
       }
     case 'delete_msg': {
-      /* 常规路径：映射表里的 int32 id。补充路径：客户端拿 get_group_msg_history
-         返回的 19 位内核 msgId 来撤（不在映射表内），此时要求 params 里带
-         group_id / user_id 定位会话 —— 大数不能盲撤，没有会话就明确拒绝。 */
+      /* 常规路径：映射表里的 int32 id。补充路径：客户端拿历史/发送回执的
+         19 位内核 msgId 来撤（不在映射表内）——先按 msgid 反查登记过的会话，
+         查不到才要求 params 里带 group_id / user_id。大数不能盲撤，没定位就明确拒绝。 */
       const kid = msgid.toKernelId(p.message_id)
       if (kid !== null) {
         const m = peerOfMessage(p.message_id)
         return { name: 'recall', args: { type: m.type, id: m.peer, msgId: m.kid }, account: m.account }
       }
       const raw = String(p.message_id ?? '')
-      if (/^\d{15,}$/.test(raw) && (p.group_id || p.user_id)) {
-        return { name: 'recall', args: { type: p.group_id !== undefined ? 'group' : 'private', id: String(p.group_id ?? p.user_id), msgId: raw } }
+      if (/^\d{15,}$/.test(raw)) {
+        if (p.group_id || p.user_id) {
+          return { name: 'recall', args: { type: p.group_id !== undefined ? 'group' : 'private', id: String(p.group_id ?? p.user_id), msgId: raw } }
+        }
+        const meta = store.findMsgIdMeta(raw)
+        if (meta && meta.peer) {
+          return { name: 'recall', args: { type: meta.chatType === 2 ? 'group' : 'private', id: meta.peer, msgId: raw }, account: meta.account || undefined }
+        }
       }
       throw new Error(`找不到该消息 ID；如查询历史消息，请同时指定群号或好友 QQ 号`)
     }
     case 'get_msg': {
       /* 补充路径先行：直接给 19 位内核 msgId + 会话（发送侧回执只有 seq/random，没进映射表） */
       const raw = String(p.message_id ?? '')
-      if (/^\d{15,}$/.test(raw) && (p.group_id || p.user_id)) {
-        return { name: 'getMsg', args: { type: p.group_id !== undefined ? 'group' : 'private', id: String(p.group_id ?? p.user_id), msgId: raw } }
+      if (/^\d{15,}$/.test(raw)) {
+        if (p.group_id || p.user_id) {
+          return { name: 'getMsg', args: { type: p.group_id !== undefined ? 'group' : 'private', id: String(p.group_id ?? p.user_id), msgId: raw } }
+        }
+        const meta = store.findMsgIdMeta(raw)
+        if (meta && meta.peer) {
+          return { name: 'getMsg', args: { type: meta.chatType === 2 ? 'group' : 'private', id: meta.peer, msgId: raw }, account: meta.account || undefined }
+        }
       }
       const m = peerOfMessage(p.message_id)
       return { name: 'getMsg', args: { type: m.type, id: m.peer, msgId: m.kid }, account: m.account }
@@ -662,7 +674,9 @@ export async function callOn (key, action, params = {}, timeoutMs = 15000) {
         ok: false,
         err: cancelled
           ? `命令未发出（排队超时，${action}）`
-          : `QQ 响应超时（${timeoutMs}ms）：${action}，结果未知`,
+          : p.overflow
+            ? `QQ 事件队列过载且回执，${action} 结果未知（可稍后重试）`
+            : `QQ 响应超时（${timeoutMs}ms）：${action}，结果未知`,
         retcode: 1401
       })
     }, timeoutMs)
@@ -748,6 +762,10 @@ export function feedKernelEvent (ev) {
     if (e) events.emit('notice', e)
   } else if (ev.evt === 'inbound-timeout') {
     events.emit('kernel_warning', { kind: 'inbound-timeout', tries: ev.tries, lastErr: ev.lastErr })
+  } else if (ev.evt === 'q-overflow') {
+    /* QQ 端事件队列打满丢过数据：给在等回执的调用打标，超时文案如实说原因 */
+    for (const p of pending.values()) p.overflow = true
+    events.emit('kernel_warning', { kind: 'q-overflow', dropped: Number(ev.dropped) || 0 })
   }
 }
 
