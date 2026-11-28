@@ -597,16 +597,20 @@
       return { elementType: 1, textElement: { content: String(it && it.text || '') } }
     })
     /* 回执匹配基线：QQ 会重新序列化 ark JSON（键序会变），字符串包含匹配不可靠，
-       通用卡片改成发送前后 diff——发之前先记一遍现有消息 id，发之后挑新出现的 ark 消息 */
+       通用卡片改成发送前后 diff——发之前先记一遍现有消息 id，发之后挑新出现的 ark 消息。
+       基线查询必须限时：它卡在 sendMsg 之前，旁挂调用一旦永久 pending 消息就永远发不出去。 */
     var beforeIds = null
+    var baselineFailed = false
     var prep = o.generic
-      ? Promise.resolve(ms.getLatestDbMsgs({ chatType: peer.chatType, peerUid: peer.peerUid, guildId: '' }, 10))
-        .then(function (r) {
-          beforeIds = {}
-          var arr = (r && r.msgList) || []
-          for (var i = 0; i < arr.length; i++) beforeIds[String(arr[i].msgId)] = 1
-          return null
-        }).catch(function () { return null })
+      ? Promise.race([
+        Promise.resolve(ms.getLatestDbMsgs({ chatType: peer.chatType, peerUid: peer.peerUid, guildId: '' }, 10)),
+        new Promise(function (_, rej) { setTimeout(function () { rej(new Error('基线快照超时')) }, 6000) })
+      ]).then(function (r) {
+        beforeIds = {}
+        var arr = (r && r.msgList) || []
+        for (var i = 0; i < arr.length; i++) beforeIds[String(arr[i].msgId)] = 1
+        return null
+      }).catch(function () { baselineFailed = true; return null })
       : Promise.resolve(null)
     return prep.then(function () {
       return Promise.resolve(ms.sendMsg('0', peer, els, new Map())).then(function (v) {
@@ -626,17 +630,25 @@
             clearTimeout(to)
             var arr = (r && r.msgList) || []
             var found = null
-            for (var i = 0; i < arr.length; i++) {
-              var m = arr[i]
-              if (beforeIds && beforeIds[String(m.msgId)]) continue
-              var els2 = m.elements || []
-              for (var k = 0; k < els2.length; k++) {
-                if (els2[k] && els2[k].arkElement && (!needle || String(els2[k].arkElement.bytesData || '').indexOf(needle) >= 0)) {
-                  found = m
-                  break
+            /* 只认本号在这条会话里新发出的卡片：别人或并发请求发的卡片不能当成本次回执，
+               基线没建成时宁可返回未知，也不猜一个可能属于别人的 msgId */
+            var me = selfUin()
+            if (!baselineFailed && beforeIds) {
+              for (var i = 0; i < arr.length; i++) {
+                var m = arr[i]
+                if (beforeIds[String(m.msgId)]) continue
+                var mine = Number(m.sendType) === 1 || (me > 0 && Number(m.senderUin) === Number(me))
+                if (!mine) continue
+                if (m.peerUid && peer.peerUid && String(m.peerUid) !== String(peer.peerUid)) continue
+                var els2 = m.elements || []
+                for (var k = 0; k < els2.length; k++) {
+                  if (els2[k] && els2[k].arkElement && (!needle || String(els2[k].arkElement.bytesData || '').indexOf(needle) >= 0)) {
+                    found = m
+                    break
+                  }
                 }
+                if (found) break
               }
-              if (found) break
             }
             res({ msgId: found ? String(found.msgId) : null, uniseq: uniseq })
           }, function () { clearTimeout(to); res({ msgId: null, uniseq: uniseq }) })

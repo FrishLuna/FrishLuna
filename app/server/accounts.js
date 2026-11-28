@@ -88,6 +88,9 @@ class Pool extends EventEmitter {
 
   _markReady (a) {
     if (a.readyEmitted) return
+    /* 必须等到双向管道都通：evt 的 hello 可能先到、cmd 还在异步连接，
+       此时立刻认主会让身份查询拿到 1404，之后 readyEmitted 又挡住重试 */
+    if (!a.bridge || !a.bridge.connected) return
     a.readyEmitted = true
     this.emit('account-ready', a.toJSON())
   }

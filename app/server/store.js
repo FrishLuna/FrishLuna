@@ -110,7 +110,7 @@ export function maxMsgIdId () {
 export function recentMsgIds (limit = 4096) {
   if (!load()) return []
   try {
-    return db.prepare('SELECT id, kernel_id AS kernelId, peer, chat_type AS chatType FROM msgids ORDER BY id DESC LIMIT ?')
+    return db.prepare('SELECT id, kernel_id AS kernelId, peer, chat_type AS chatType, account FROM msgids ORDER BY id DESC LIMIT ?')
       .all(Math.max(1, Math.min(20000, Number(limit) || 4096)))
   } catch { return [] }
 }

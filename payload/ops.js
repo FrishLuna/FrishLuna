@@ -637,7 +637,10 @@
       p.then(function (r) {
         var arr = list(r && r.msgList)
         if (!arr.length) return reject(new Error('未找到该消息：消息 ID ' + msgId + ' 消息不存在（可能过早、已被撤回或会话不匹配）'))
-        resolve(JSON.stringify(arr[0]).slice(0, 60000))
+        /* 不截断：整串交给分片通道；真超容量就明确报错，不能返回半截 JSON 让下游解析失败 */
+        var txt = JSON.stringify(arr[0])
+        if (txt.length > 4194304) return reject(new Error('该消息内容过大（' + (txt.length / 1048576).toFixed(1) + 'MB），无法完整返回'))
+        resolve(txt)
       }, function (e) { reject(new Error('查询消息被拒绝：' + ((e && e.message) || e))) })
     })
   }

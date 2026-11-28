@@ -58,6 +58,13 @@ function wsFrame (payload) {
   return Buffer.concat([head, body])
 }
 
+/** 服务端控制帧（pong/close）：RFC6455 要求 pong 原样回显 ping 的载荷，控制帧上限 125 字节 */
+function wsCtrl (opcode, payload) {
+  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '', 'utf8')
+  const len = Math.min(body.length, 125)
+  return Buffer.concat([Buffer.from([0x80 | opcode, len]), body.subarray(0, len)])
+}
+
 /** 从缓冲里尽力解析出完整的客户端帧（客户端必须掩码）。返回 {frames:[{opcode,payload}], rest} */
 function wsParse (buf) {
   const frames = []
@@ -972,12 +979,14 @@ function upgradeHandler (entry) {
   const client = { sock, buf: Buffer.alloc(0) }
   wsClients.add(client)
   sock.on('data', (c) => {
+    /* 监听重建时被吊销的连接：即使还有残留数据也不许再发指令 */
+    if (client.revoked) { try { sock.destroy() } catch {}; return }
     client.buf = Buffer.concat([client.buf, c])
     const { frames, rest } = wsParse(client.buf)
     client.buf = rest
     for (const f of frames) {
       if (f.opcode === 8) { sock.end(); return } // close
-      if (f.opcode === 9) sock.write(Buffer.from([0x8a, 0x00])) // ping→pong
+      if (f.opcode === 9) sock.write(wsCtrl(0xA, f.payload)) // ping→pong，回显载荷
       if (f.opcode === 1 || f.opcode === 2) {
         try {
           const req = JSON.parse(f.payload.toString('utf8'))
@@ -1237,6 +1246,10 @@ function applyNet (net) {
 
 /* 按当前矩阵重建监听（HTTP 服务 + 正向 WS，绑定 LISTEN_HOST） */
 function rebuildListeners () {
+  /* 先撤销已升级的正向 WS：server.close() 不会关闭升级后的 socket，
+     不主动销毁的话，改了令牌或删了监听条目，旧客户端仍能继续调用 API */
+  for (const c of wsClients) { try { c.revoked = true; c.sock.destroy() } catch {} }
+  wsClients.clear()
   for (const l of listeners) { try { l.srv.close() } catch {} }
   listeners = []
   const openOne = (kind, entry) => {
@@ -1323,7 +1336,11 @@ function apiRequestHandler (entry) {
 export async function start (opts = {}) {
   if (running) return { ok: true, httpPort }
   /* 启动迁移：新矩阵是空的而旧字段有值（老配置升级场景）→ 用旧字段生成矩阵 */
-  const net = (opts.network && !netIsEmpty(opts.network)) ? normalizeNetwork(opts.network) : legacyToNetwork(opts)
+  /* 矩阵分支必须把统一令牌带上：normalizeNetwork 只处理连接条目、不返回 token，
+     直接拿它喂 applyNet 会把已配置的统一令牌置空，专用令牌留空的条目就此免鉴权 */
+  const net = (opts.network && !netIsEmpty(opts.network))
+    ? { ...normalizeNetwork(opts.network), token: String(opts.token || '') }
+    : legacyToNetwork(opts)
   applyNet(net)
   running = true
   rebuildListeners()
@@ -1372,7 +1389,9 @@ export function stop () {
  */
 export async function applyConfig (opts = {}) {
   if (!running) return { ok: false }
-  const net = opts.network ? normalizeNetwork(opts.network) : legacyToNetwork(opts)
+  const net = opts.network
+    ? { ...normalizeNetwork(opts.network), token: String(opts.token || '') }
+    : legacyToNetwork(opts)
   if (JSON.stringify(net) === JSON.stringify(currentNet())) return { ok: true, changed: false }
   applyNet(net)
   rebuildListeners()

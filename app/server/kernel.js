@@ -34,10 +34,26 @@ function onOpEvent (ev) {
        但两个账号同时有同名 op 时按 seq 对账更保险的是连 pid 一起核。 */
     if (ev.__pid && p.pid && Number(ev.__pid) !== Number(p.pid)) return
     if (ev.evt === 'op-chunk') {
-      p.chunks[ev.idx] = ev.part
-      p.got = (p.got || 0) + 1
-      if (p.got === ev.total) {
-        const full = Array.from({ length: ev.total }, (_, i) => p.chunks[i]).join('')
+      const total = Number(ev.total)
+      const idx = Number(ev.idx)
+      /* 分片必须校验范围与一致性：重复投递的同一片只认第一次，
+         否则 got 会被重复计数提前凑满，拼出来的是缺片的残数据却报成功 */
+      if (!Number.isInteger(total) || !Number.isInteger(idx) || total <= 0 || idx < 0 || idx >= total) return
+      if (p.total == null) p.total = total
+      else if (p.total !== total) return
+      if (p.chunks[idx] === undefined) {
+        p.chunks[idx] = ev.part
+        p.got = (p.got || 0) + 1
+        p.bytes = (p.bytes || 0) + String(ev.part || '').length
+      }
+      if (p.bytes > 16 * 1024 * 1024) {
+        pending.delete(ev.seq)
+        clearTimeout(p.timer)
+        p.resolve({ ok: false, err: '返回内容超过容量上限，已中断接收', retcode: 1500 })
+        return
+      }
+      if (p.got === p.total) {
+        const full = Array.from({ length: p.total }, (_, i) => p.chunks[i]).join('')
         pending.delete(ev.seq)
         clearTimeout(p.timer)
         p.resolve({ ok: true, ret: full, name: ev.name })
@@ -107,7 +123,7 @@ function peerOfMessage (onebotId) {
   }
   const m = msgid.metaOf(onebotId)
   if (!m || !m.peer) throw new Error(`找不到该消息所属会话（面板重启前的消息无法直接定位）`)
-  return { kid, peer: m.peer, type: m.chatType === 2 ? 'group' : 'private' }
+  return { kid, peer: m.peer, type: m.chatType === 2 ? 'group' : 'private', account: m.account || '' }
 }
 
 function translate (action, params) {
@@ -256,7 +272,7 @@ function translate (action, params) {
       const kid = msgid.toKernelId(p.message_id)
       if (kid !== null) {
         const m = peerOfMessage(p.message_id)
-        return { name: 'recall', args: { type: m.type, id: m.peer, msgId: m.kid } }
+        return { name: 'recall', args: { type: m.type, id: m.peer, msgId: m.kid }, account: m.account }
       }
       const raw = String(p.message_id ?? '')
       if (/^\d{15,}$/.test(raw) && (p.group_id || p.user_id)) {
@@ -271,7 +287,7 @@ function translate (action, params) {
         return { name: 'getMsg', args: { type: p.group_id !== undefined ? 'group' : 'private', id: String(p.group_id ?? p.user_id), msgId: raw } }
       }
       const m = peerOfMessage(p.message_id)
-      return { name: 'getMsg', args: { type: m.type, id: m.peer, msgId: m.kid } }
+      return { name: 'getMsg', args: { type: m.type, id: m.peer, msgId: m.kid }, account: m.account }
     }
     case 'get_login_info':
       return { name: 'selfInfo', args: {} }
@@ -503,7 +519,8 @@ function translate (action, params) {
       const m = peerOfMessage(p.message_id)
       return {
         name: 'emojiLike',
-        args: { id: m.peer, msgId: m.kid, code: String(p.emoji_id ?? p.reaction_id ?? 128077) }
+        args: { id: m.peer, msgId: m.kid, code: String(p.emoji_id ?? p.reaction_id ?? 128077) },
+        account: m.account
       }
     }
     case 'get_version_info':
@@ -563,6 +580,13 @@ export async function callOn (key, action, params = {}, timeoutMs = 15000) {
     t = translate(action, params)
   } catch (e) {
     return { ok: false, err: e.message, retcode: 1400 } // 参数/翻译层错误
+  }
+  /* 消息操作必须落在消息所属账号上：跨账号静默改路由会作用到另一个账号的消息 */
+  if (t && t.account) {
+    const target = (key === null || key === undefined || key === '') ? String(selfId || '') : String(key)
+    if (/^\d{5,12}$/.test(target) && t.account !== target) {
+      return { ok: false, err: `该消息属于账号 ${t.account}，与目标账号 ${target} 不一致`, retcode: 1404 }
+    }
   }
   if (t === null) {
     if (action === 'get_version_info') {
@@ -627,7 +651,12 @@ export async function probe () {
 function deps (ev) {
   /* 多账号：事件自带 __selfId（accounts.js 打上去的），没有才退回全局 */
   const sid = Number((ev && ev.__selfId) || selfId) || 0
-  return { toOneBotId: msgid.toOneBotId, toQq: (u) => uidmap.toQq(u), selfId: sid }
+  return {
+    /* 注册映射时带上账号：同一内核 msgId 在不同账号下各自独立，不互相覆盖 */
+    toOneBotId: (kid, info) => msgid.toOneBotId(kid, Object.assign({ account: sid ? String(sid) : '' }, info || {})),
+    toQq: (u) => uidmap.toQq(u),
+    selfId: sid
+  }
 }
 
 /** host 侧把内核原始消息喂进来（index.js 接 inbound/payload 事件后调它） */

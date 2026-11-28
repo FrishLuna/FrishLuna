@@ -508,7 +508,13 @@ async function resolveIdentity (pid) {
 pool.on('account-new', (a) => bus.info('account', `检测到 QQ 已启动（PID: ${a.pid}），正在连接…`))
 pool.on('account-ready', (a) => { resolveIdentity(a.pid) })
 pool.on('account-gone', (a) => bus.warn('account', `账号下线 pid=${a.pid}${a.uin ? '（' + a.uin + '）' : ''}`))
-pool.on('active', (a) => { if (a) bus.debug('account', `当前账号 ${a.uin || a.pid}`) })
+/* 切换账号必须同步内核身份：否则 get_login_info、X-Self-ID、
+   空间与闪传等按 selfId 取身份的功能都会沿用上一个账号 */
+pool.on('active', (a) => {
+  if (!a) return
+  if (a.uin) kernel.setSelfId(a.uin)
+  bus.debug('account', `当前账号 ${a.uin || a.pid}`)
+})
 
 function getState () {
   const cfg = load()

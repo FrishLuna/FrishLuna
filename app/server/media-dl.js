@@ -175,14 +175,22 @@ export async function downloadTo (signedUrl, { name, ext } = {}) {
       continue
     }
     /* invalid rkey → 强刷一次重签（自愈逻辑） */
+    /* 只有 QQ 媒体域名才可能是 rkey 失效：普通 HTTP 的 403/404 要保留原始状态码，
+       别用「rkey 拉不到」把真实错误盖掉 */
     if (!res.ok && attempt === 0) {
       const text = await res.text().catch(() => '')
-      if (/invalid rkey|retcode.*-5503010/i.test(text) || res.status === 403 || res.status === 404) {
-        await rkey(true)
-        signedUrl = await signUrl(signedUrl.split('&rkey=')[0].split('?rkey=')[0], { kind: ext === 'mp4' ? 'video' : (ext === 'amr' || ext === 'slk' ? 'record' : 'image'), isGroup: true })
+      const mayBeRkey = urlNeedsRkey(signedUrl) &&
+        (res.status === 403 || res.status === 404 || /invalid rkey|retcode.*-5503010/i.test(text))
+      if (mayBeRkey) {
+        try {
+          await rkey(true)
+          signedUrl = await signUrl(signedUrl.split('&rkey=')[0].split('?rkey=')[0], { kind: ext === 'mp4' ? 'video' : (ext === 'amr' || ext === 'slk' ? 'record' : 'image'), isGroup: true })
+        } catch (e) {
+          throw new Error(`HTTP ${res.status}（刷新媒体凭据也失败：${e && e.message ? e.message : e}）`)
+        }
         continue
       }
-      throw new Error(`CDN HTTP ${res.status}：${text.slice(0, 200)}`)
+      throw new Error(`HTTP ${res.status}：${text.slice(0, 200)}`)
     }
     if (!res.ok) throw new Error(`CDN HTTP ${res.status}`)
     const buf = Buffer.from(await res.arrayBuffer())
@@ -307,9 +315,11 @@ export function extractMedia (elements, kind) {
 export async function getMedia ({ file, url, msg_id, group_id, user_id, kind = 'image', isGroup = true, no_local = false } = {}) {
   let raw = String(url || file || '')
   let meta = { url: raw, sourcePath: '', md5: '', name: '', size: 0 }
-  /* file 是 md5/文件名形态时，从 get_msg 里反查元素 */
-  if (raw && !/^https?:/.test(raw) && !raw.startsWith('/download')) {
-    if (!msg_id) throw new Error('file 参数不是 URL/path 形态（' + raw.slice(0, 60) + '），请改传消息里 image/record 段的 url 字段，或同时传 msg_id')
+  const looksUrl = (t) => /^https?:/.test(t) || t.startsWith('/download')
+
+  /* 反查条件：给了 msg_id 且没有可直连的 URL。以前还要求先给一个非 URL 的 file，
+     只传 message_id 的调用会直接掉到「没有可下载的 URL」 */
+  if (msg_id && !looksUrl(raw)) {
     const g = await kernel.call('get_msg', { message_id: String(msg_id), group_id, user_id: user_id }, 15000)
     if (!g.ok) throw new Error('get_msg 失败：' + (g.err || g.msg))
     const gm = typeof g.ret === 'string' ? JSON.parse(g.ret) : g.ret
@@ -317,34 +327,43 @@ export async function getMedia ({ file, url, msg_id, group_id, user_id, kind = '
     const m = extractMedia(typeof els === 'string' ? JSON.parse(els) : els, kind)
     if (!m) throw new Error('消息里没有 ' + kind + ' 元素')
     meta = m
-    /* 语音/视频：URL 优先级 = 元素自带 url > NTV2 四命令现取直链 > fileUuid 拼 appid（图片同族才有效） */
-    if (meta.url) {
-      raw = meta.url
-    } else if (kind === 'record' || kind === 'video') {
-      try {
-        const ntv = await ntv2UrlFor(meta, { kind, isGroup, groupUin: group_id, selfUid: '' })
-        meta.signedUrl = ntv.url
-        raw = ntv.url
-        NTV2_LAST = ''
-      } catch (e) {
-        NTV2_LAST = String(e.message || e)
-        if (!meta.fileUuid) throw new Error('NTV2 取直链失败：' + NTV2_LAST)
-        raw = '/download?appid=' + (isGroup ? 1407 : 1406) + '&fileid=' + encodeURIComponent(meta.fileUuid)
+    /* 本地已落盘且允许本地读取时不再取直链：网络失败不该把本地缓存一起挡掉 */
+    const canLocal = !no_local && meta.sourcePath && fs.existsSync(meta.sourcePath)
+    if (!canLocal) {
+      /* 语音/视频：URL 优先级 = 元素自带 url > NTV2 四命令现取直链 > fileUuid 拼 appid（图片同族才有效） */
+      if (meta.url) {
+        raw = meta.url
+      } else if (kind === 'record' || kind === 'video') {
+        try {
+          const ntv = await ntv2UrlFor(meta, { kind, isGroup, groupUin: group_id, selfUid: '' })
+          meta.signedUrl = ntv.url
+          raw = ntv.url
+          NTV2_LAST = ''
+        } catch (e) {
+          NTV2_LAST = String(e.message || e)
+          if (!meta.fileUuid) throw new Error('NTV2 取直链失败：' + NTV2_LAST)
+          raw = '/download?appid=' + (isGroup ? 1407 : 1406) + '&fileid=' + encodeURIComponent(meta.fileUuid)
+        }
+        meta.ntv2 = true
+      } else {
+        raw = m.url || (m.fileUuid ? '/download?appid=' + (isGroup ? 1407 : 1406) + '&fileid=' + encodeURIComponent(m.fileUuid) : '') || m.sourcePath
       }
-      meta.ntv2 = true
-    } else {
-      raw = m.url || (m.fileUuid ? '/download?appid=' + (isGroup ? 1407 : 1406) + '&fileid=' + encodeURIComponent(m.fileUuid) : '') || m.sourcePath
     }
+  } else if (raw && !looksUrl(raw)) {
+    throw new Error('file 参数不是 URL/path 形态（' + raw.slice(0, 60) + '），请改传消息里 image/record 段的 url 字段，或同时传 msg_id')
   }
-  if (!raw) throw new Error('没有可下载的 URL（元素缺 url 且无 fileUuid 可拼）')
+  const hasLocal = !no_local && meta.sourcePath && fs.existsSync(meta.sourcePath)
+  if (!raw && !hasLocal) throw new Error('没有可下载的 URL（元素缺 url 且无 fileUuid 可拼）')
 
   /* 双路：QQ 本地已落盘的直接拷（零网络开销）；no_local=true 强制走 CDN */
-  if (!no_local && meta.sourcePath && fs.existsSync(meta.sourcePath)) {
+  if (hasLocal) {
     fs.mkdirSync(MEDIA_DIR, { recursive: true })
     const fname = (meta.md5 || path.basename(meta.sourcePath, path.extname(meta.sourcePath))) + path.extname(meta.sourcePath) || 'media.bin'
     const fp = path.join(MEDIA_DIR, fname)
     fs.copyFileSync(meta.sourcePath, fp)
-    const signed = raw.startsWith('/download') ? await signUrl(raw, { kind, isGroup }) : (urlNeedsRkey(raw) ? await signUrl(raw, { kind, isGroup }) : raw)
+    const signed = raw
+      ? (raw.startsWith('/download') ? await signUrl(raw, { kind, isGroup }) : (urlNeedsRkey(raw) ? await signUrl(raw, { kind, isGroup }) : raw))
+      : ''
     return { file: fp, url: signed, file_size: fs.statSync(fp).size, via: 'local' }
   }
 

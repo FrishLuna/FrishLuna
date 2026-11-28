@@ -19,6 +19,18 @@ function lruTouch (m, k, v) {
   }
 }
 
+/** 映射键带账号前缀：不同账号下同名内核 msgId 各自独立，不能互相覆盖会话信息 */
+function mkey (kernelMsgId, account) {
+  const a = account ? String(account) : ''
+  return a ? a + ':' + String(kernelMsgId) : String(kernelMsgId)
+}
+
+/** 键 → 纯内核 msgId（剥掉账号前缀） */
+function stripKey (key) {
+  const i = key.indexOf(':')
+  return i > 0 ? key.slice(i + 1) : key
+}
+
 /** 一次性把库里的映射灌回内存（懒执行，避免模块加载期就开库） */
 function restore () {
   if (restored) return
@@ -31,7 +43,7 @@ function restore () {
       if (!id || !kid) continue
       lruTouch(fwd, id, kid)
       lruTouch(rev, kid, id)
-      meta.set(kid, { peer: String(r.peer || ''), chatType: Number(r.chatType) || 1 })
+      meta.set(kid, { peer: String(r.peer || ''), chatType: Number(r.chatType) || 1, account: String(r.account || '') })
     }
   } catch { /* 库不可用就纯内存跑 */ }
 }
@@ -44,9 +56,10 @@ function restore () {
  */
 export function toOneBotId (kernelMsgId, info) {
   restore()
-  const key = String(kernelMsgId)
-  if (info && (info.peer || info.chatType)) {
-    meta.set(key, { peer: String(info.peer || ''), chatType: Number(info.chatType) || 1 })
+  const acct = info && info.account ? String(info.account) : ''
+  const key = mkey(kernelMsgId, acct)
+  if (info && (info.peer || info.chatType || acct)) {
+    meta.set(key, { peer: String(info.peer || ''), chatType: Number(info.chatType) || 1, account: acct })
     while (meta.size > LIMIT) meta.delete(meta.keys().next().value)
   }
   if (rev.has(key)) {
@@ -82,7 +95,7 @@ export function toKernelId (onebotId) {
   if (v === undefined) return null
   lruTouch(fwd, key, v)
   lruTouch(rev, v, key)
-  return v
+  return stripKey(v)
 }
 
 /** 当前占用条数（自测用） */
@@ -96,9 +109,13 @@ export function size () {
  * @returns {{peer:string, chatType:number} | null}
  */
 export function metaOf (onebotId) {
-  const kid = toKernelId(onebotId)
-  if (kid === null) return null
-  return meta.get(kid) || null
+  restore()
+  const key = Number(onebotId)
+  if (!Number.isInteger(key)) return null
+  const v = fwd.get(key)
+  if (v === undefined) return null
+  /* 直接用带前缀的原始键取会话信息，不能拿剥过前缀的值去查 */
+  return meta.get(v) || null
 }
 
 /** 清空内存表（重启语义；仅测试与重置时用，不删库） */
