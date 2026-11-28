@@ -1021,11 +1021,19 @@ const OPS = {
   probe, devEval, probeCall, kernelListen, findUid, getMsgs, emojiLikesList
 }
 
+/* 调试类 op：能在 QQ 进程内执行任意 JS / 调任意内核方法。只锁 op 名不够 ——
+   面板 API（/api/lab/invoke）有令牌就能调，等于绕开 OneBot 侧的 FL_DEV_EVAL 门禁。
+   两侧必须用同一把锁：没显式 FL_DEV_EVAL=1 就一律拒绝。 */
+const DEV_OPS = ['devEval', 'probeCall', 'kernelListen']
+
 export function has (op) { return Object.prototype.hasOwnProperty.call(OPS, op) }
 
 /** 统一入口：返回 { ok, msg, data?, list? } */
 /** ctx.account = uin 或 pid：这次调用打给哪个账号（不改当前账号） */
 export async function run (op, args = {}, ctx = {}) {
+  if (DEV_OPS.includes(op) && process.env.FL_DEV_EVAL !== '1') {
+    return { ok: false, msg: '调试通道已关闭（需要时用 FL_DEV_EVAL=1 启动面板）' }
+  }
   const fn = OPS[op]
   if (!fn) return { ok: false, msg: `实验台还没有 ${op} 这一项` }
   const key = ctx && ctx.account ? ctx.account : null

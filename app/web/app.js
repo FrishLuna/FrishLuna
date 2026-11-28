@@ -191,8 +191,11 @@
     }, ms)
   }
 
+  /* 转义必须含引号：昵称/消息文本/会话串都会进 title=""、value="" 属性，
+     只转 & < > 的话一个双引号就能逃出属性注入事件处理器 */
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 
   /* 日志来源对用户显示的短名：内部通道名不上界面 */
   const SCOPE_LABEL = {

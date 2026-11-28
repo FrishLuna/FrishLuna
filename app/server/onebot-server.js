@@ -939,13 +939,25 @@ function broadcast (ev) {
   }
 }
 
+/** 恒定时间比较：令牌校验不能走 ===（逐字节短路，长度/前缀可被计时侧信道逐段猜出） */
+function tokenEq (a, b) {
+  const ba = Buffer.from(String(a || ''), 'utf8')
+  const bb = Buffer.from(String(b || ''), 'utf8')
+  if (ba.length !== bb.length) {
+    /* 长度不等也要跑一次比较，避免长度本身泄露 */
+    crypto.timingSafeEqual(ba, ba)
+    return false
+  }
+  return crypto.timingSafeEqual(ba, bb)
+}
+
 /** entryToken 有值用 entry，否则用统一令牌；都没设 = 仅回环放行 */
 function authOk (req, url, entryToken) {
   const t = entryToken || token
   if (!t) return true
   const h = req.headers.authorization || ''
-  if (h.startsWith('Bearer ') && h.slice(7) === t) return true
-  if (url.searchParams.get('access_token') === t) return true
+  if (h.startsWith('Bearer ') && tokenEq(h.slice(7), t)) return true
+  if (tokenEq(url.searchParams.get('access_token'), t)) return true
   return false
 }
 
