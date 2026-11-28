@@ -28,7 +28,8 @@ login_window_up() {
   for id in $(xdotool search --onlyvisible --name '^QQ$' 2>/dev/null); do
     g=$(xdotool getwindowgeometry --shell "$id" 2>/dev/null) || continue
     eval "$g"
-    [ "${WIDTH:-0}" -ge 600 ] && [ "${HEIGHT:-0}" -ge 380 ] && return 0
+    # 登录窗 680x440；登录后的主窗口 960x640 不能误判成登录窗，否则永远 defer 不注入
+    [ "${WIDTH:-0}" -ge 600 ] && [ "${WIDTH:-0}" -le 800 ] && [ "${HEIGHT:-0}" -ge 380 ] && [ "${HEIGHT:-0}" -le 560 ] && return 0
   done
   return 1
 }
