@@ -713,6 +713,8 @@
           if (sg.type === 'image') { preview = '[图片]'; break }
           if (sg.type === 'face') { preview = '[表情]'; break }
         }
+        /* 节点只给了 text 时没有 segments，摘要照样要把消息内容带出来 */
+        if (!preview && nodes[i].text) preview = String(nodes[i].text).slice(0, 30)
         news.push({ text: (nm || String(nodes[i].uin || 'QQ用户')) + (preview ? ': ' + preview : '') })
       }
     }
