@@ -329,10 +329,18 @@ function feedKernelFromPayload (ev) {
   try {
     const isGroup = !!(ev.chat && ev.chat.type === 'group')
     const text = String(ev.text || '')
+    /* 入站带的 uin/uid 对先学进映射表：私聊第一条消息不该因为缓存空就整条丢掉 */
+    const inUin = String(ev.uin || '')
+    const inUid = String(ev.senderUid || '')
+    if (/^\d{5,12}$/.test(inUin) && /^u_/.test(inUid)) {
+      try { uidmap.backfill([{ uin: inUin, uid: inUid }]) } catch {}
+    }
     const pseudo = {
       chatType: isGroup ? 2 : 1,
       peerUid: String((ev.chat && ev.chat.id) || ''),
-      senderUid: String(ev.senderUid || ev.uin || ''),
+      /* 有真 QQ 号就一起带上，转换器优先用它，不必再反查 */
+      senderUin: inUin,
+      senderUid: inUid || inUin,
       sendMemberName: String(ev.nick || ''),
       sendNickName: String(ev.nick || ''),
       msgId: String(ev.msgId || ''),
@@ -439,8 +447,17 @@ function onWatchEvent (ev) {
     const user = qqOfUid(uid0)
     /* 记下 (QQ号 → uid)：对方还不是好友时 0xB5D 审批只能靠这个缓存解析 uid */
     if (kind === 'friend-request') { try { rememberBuddy(user, uid0) } catch {} }
-    const n = emitWatchNotice({ kind: kind === 'friend-request' ? 'friend_request' : 'group_request', group, user, comment: f.comment, at: ev.at })
-    if (n) bus.warn('watch', `${kind === 'friend-request' ? '好友' : '入群'}申请：${user || '?'} ${f.comment || ''}`)
+    /* flag 必须带上，否则标准客户端拿到空 flag 无法回填审批：
+       好友申请用对方 uid，入群申请用规范串（seq/群号/eventType/filtered） */
+    const reqSeq = Number(f.seq ?? f.requestSeq ?? f.seqId ?? 0) || 0
+    const reqEventType = Number(f.eventType ?? f.event_type ?? 0) || 0
+    const reqFiltered = (f.filtered === true || f.filtered === 1) ? 1 : 0
+    const flag = kind === 'friend-request'
+      ? (uid0 || String(user || ''))
+      : (reqSeq ? 'flgrp:' + reqSeq + ':' + group + ':' + reqEventType + ':' + reqFiltered : '')
+    const n = emitWatchNotice({ kind: kind === 'friend-request' ? 'friend_request' : 'group_request', group, user, comment: f.comment, flag, at: ev.at })
+    if (n && !flag) bus.warn('watch', `${kind === 'friend-request' ? '好友' : '入群'}申请缺少审批标识（${f.comment || ''}）`)
+    else if (n) bus.warn('watch', `${kind === 'friend-request' ? '好友' : '入群'}申请：${user || '?'} ${f.comment || ''}`)
     return
   }
 

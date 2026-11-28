@@ -1,4 +1,6 @@
-import { bridge } from './pipe.js'
+/* 多账号后每个账号自建 Bridge：必须走 accounts 的门面，
+   不能再用 pipe.js 里那个没人 attach 的单例（connected 永远 false） */
+import { bridge } from './accounts.js'
 
 let seq = 0
 const pending = new Map()
@@ -23,7 +25,8 @@ export function op (body, timeoutMs = 20000) {
   if (!bridge.connected) return Promise.resolve({ evt: 'kop-err', why: '通道未连接（QQ 未运行或未注入）' })
   seq += 1
   const my = seq
-  const req = { cmd: 'kop', seq: my, ...body }
+  /* 受保护字段放最后：body 里的 cmd/seq 不能覆盖服务端分配的序号 */
+  const req = { ...body, cmd: 'kop', seq: my }
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(my)

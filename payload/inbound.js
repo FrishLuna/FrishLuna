@@ -287,7 +287,8 @@
           uin: (Number(m.senderUin) || 0) ? String(m.senderUin) : sender,
           senderUid: sender,
           nick: String(m.sendMemberName || m.sendNickName || ''),
-          text: parts.join('').slice(0, 1000),
+          /* 正文不裁剪：剪了之后 OneBot 事件和消息库都永久丢失后半截，只在显示层遮挡 */
+          text: parts.join(''),
           rawTypes: rawTypes.slice(0, 32),
           msgId: String(m.msgId || ''),
           msgSeq: String(m.msgSeq || ''),

@@ -174,6 +174,8 @@ export async function tuwenArkSend ({ group_id, groupId, user_id, userId, title,
   const peerType = (g !== undefined && g !== null && g !== '') ? 1 : 0
   const targetId = Number(peerType ? g : u)
   if (!targetId) throw new Error('缺少 group_id 或 user_id')
+  /* 图文卡走 OIDB 直发，绕过通用 translate 的名单检查，这里必须自己补一道 */
+  if (peerType && kernel.isBlockedGroup(g)) throw new Error(`群 ${g} 已在禁止发送名单中，消息未发送`)
   const jump = jumpUrl || jump_url
   const preview = previewUrl || preview_url || ''
   if (!title || !desc || !jump) throw new Error('图文卡需要 title / desc / jump_url')

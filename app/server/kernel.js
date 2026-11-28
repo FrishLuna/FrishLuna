@@ -86,6 +86,12 @@ let blockedGroups = []
 export function setBlockedGroups (list) {
   blockedGroups = (Array.isArray(list) ? list : []).map(Number).filter(Number.isInteger)
 }
+
+/** 群是否在禁发名单里。走 OIDB 直发的卡片等旁路也必须查 */
+export function isBlockedGroup (gid) {
+  if (gid === undefined || gid === null || gid === '') return false
+  return Array.isArray(blockedGroups) && blockedGroups.includes(Number(gid) || gid)
+}
 export function getBlockedGroups () {
   return blockedGroups.slice()
 }
@@ -589,8 +595,21 @@ async function seedFriendUidTable (timeoutMs) {
   } catch { /* 补表失败就让后续按原逻辑报错，别把真实原因盖掉 */ }
 }
 
+/* 请求级账号上下文：OneBot 的 self_id 需要贯穿到专用分支里的 kernel.call。
+   用 getBuiltinModule 取而不是顶层 import：隔离测试环境会剥离 import 行，
+   取不到就降级成直通，不至于整个模块加载失败 */
+const ALS = (typeof process !== 'undefined' && typeof process.getBuiltinModule === 'function')
+  ? process.getBuiltinModule('node:async_hooks').AsyncLocalStorage
+  : null
+const callCtx = ALS ? new ALS() : { run: (k, fn) => fn(), getStore: () => null }
+
 export async function call (action, params = {}, timeoutMs = 15000) {
-  return callOn(null, action, params, timeoutMs)
+  return callOn(callCtx.getStore() ?? null, action, params, timeoutMs)
+}
+
+/** 把后续所有 kernel.call 绑定到指定账号（来自 OneBot 请求的 self_id） */
+export function withAccount (key, fn) {
+  return callCtx.run(key == null || key === '' ? null : String(key), fn)
 }
 
 /**
@@ -635,7 +654,16 @@ export async function callOn (key, action, params = {}, timeoutMs = 15000) {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(my)
-      resolve({ ok: false, err: `QQ 响应超时（${timeoutMs}ms）：${action}`, retcode: 1401 })
+      /* 还躺在队列里没写出去的，超时就撤掉；已经交给 QQ 的只能如实说结果未知 */
+      let cancelled = false
+      try { cancelled = acct.bridge.cancel ? acct.bridge.cancel(my) : false } catch { cancelled = false }
+      resolve({
+        ok: false,
+        err: cancelled
+          ? `命令未发出（排队超时，${action}）`
+          : `QQ 响应超时（${timeoutMs}ms）：${action}，结果未知`,
+        retcode: 1401
+      })
     }, timeoutMs)
     pending.set(my, { resolve, timer, chunks: {}, got: 0, pid: acct.pid })
     try {

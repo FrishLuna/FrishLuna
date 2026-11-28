@@ -63,7 +63,10 @@ export function toMessageEvent (msg, deps) {
   const raw = message.map((s) => s.type === 'text' ? s.data.text
     : s.type === 'at' ? `@${s.data.qq}` : `[${s.type}]`).join('')
   const isGroup = Number(msg.chatType) === 2
-  const userQq = deps.toQq ? deps.toQq(msg.senderUid) : null
+  /* 入站自带真 QQ 号就直接用，别依赖 uidmap 是否已经学到这条映射 */
+  const userQq = Number(msg.senderUin) > 0
+    ? Number(msg.senderUin)
+    : (deps.toQq ? deps.toQq(msg.senderUid) : null)
   if (!isGroup && userQq === null) return null // 私聊必须能反查到 QQ 号，否则事件无主
   return {
     post_type: 'message',

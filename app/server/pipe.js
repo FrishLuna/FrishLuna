@@ -3,6 +3,8 @@ import { EventEmitter } from 'node:events'
 import { pipePath, encodeCmd } from './platform.js'
 
 const MAX_FRAME = 16 * 1024 * 1024
+/* 排队超过这个时间就不再补发：调用侧早已超时 */
+const QUEUE_TTL_MS = 30000
 const MAX_QUEUE = 64
 const RECONNECT_MS = 2500
 
@@ -189,7 +191,7 @@ export class Bridge extends EventEmitter {
         this.dropped++
         this._warnBackpressure('queue-full')
       }
-      this._queue.push(text)
+      this._queue.push({ text, at: Date.now(), seq: (obj && obj.seq !== undefined ? obj.seq : null) })
       return true
     }
 
@@ -204,11 +206,24 @@ export class Bridge extends EventEmitter {
     }
   }
 
+  /** 撤销尚未写出的排队命令：调用方已超时放弃，再发出去就是重复操作 */
+  cancel (seq) {
+    if (seq === undefined || seq === null) return false
+    const before = this._queue.length
+    this._queue = this._queue.filter((it) => !(it && it.seq === seq))
+    const hit = this._queue.length !== before
+    if (hit) this.cancelled = (this.cancelled || 0) + 1
+    return hit
+  }
+
   _flush () {
     const sock = this.cmd
     while (this._queue.length) {
       if (!sock || sock.destroyed || sock.writable === false) return
-      const text = this._queue.shift()
+      const item = this._queue.shift()
+      const text = typeof item === 'string' ? item : item.text
+      /* 排队太久就别发了：调用方早就超时放弃，迟到的命令只会变成重复操作 */
+      if (item && item.at && Date.now() - item.at > QUEUE_TTL_MS) { this.dropped++; continue }
       try {
         if (sock.write(encodeCmd(text)) === false) {
           this._needDrain = true

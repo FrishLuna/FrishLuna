@@ -120,8 +120,8 @@ function stripPrefix (rkey) {
    否则下载任意站点文件时会把媒体 rkey 一起送出去 */
 const RKEY_HOST = /(^|\.)(nt\.qq\.com\.cn|qpic\.cn)$/i
 
-function urlNeedsRkey (url) {
-  if (!url || url.includes('rkey=')) return false
+/** 是否 QQ 自己的媒体域名（能否携带/刷新 rkey 只看这个） */
+function isQQMediaHost (url) {
   let u
   try { u = new URL(url) } catch { return false }
   if (u.protocol !== 'https:') return false
@@ -129,6 +129,12 @@ function urlNeedsRkey (url) {
   if (!RKEY_HOST.test(host)) return false
   if (/^gchat\.qpic\.cn$/i.test(host)) return false   /* 图片直链本身不带 rkey */
   return true
+}
+
+/** 是否还需要补签名；已带 rkey 的返 false，过期刷新要用 isQQMediaHost 判断 */
+function urlNeedsRkey (url) {
+  if (!url || url.includes('rkey=')) return false
+  return isQQMediaHost(url)
 }
 
 function primaryTypeFor (url, kind, isGroup) {

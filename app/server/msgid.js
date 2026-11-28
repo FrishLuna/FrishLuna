@@ -1,6 +1,8 @@
 import * as store from './store.js'
 
 const LIMIT = 4096
+/* 内存号段起点：与库自增号段（从 1 起）错开，库暂时写失败时也不会与恢复后的号撞车 */
+const MEM_ID_BASE = 1000000000
 
 /** 双向 LRU：正向 id→msgId，反向 msgId→id */
 let fwd = new Map()
@@ -72,8 +74,9 @@ export function toOneBotId (kernelMsgId, info) {
   const dbId = store.putMsgId(key, info && info.peer, info && info.chatType, info && info.account)
   let id = Number(dbId) || 0
   if (!id) {
+    if (counter < MEM_ID_BASE) counter = MEM_ID_BASE
     counter += 1
-    if (counter > 2147483647) counter = 1 // int32 上限回绕：仅当单进程发满 21 亿条
+    if (counter > 2147483647) counter = MEM_ID_BASE
     id = counter
   } else if (id > counter) {
     counter = id

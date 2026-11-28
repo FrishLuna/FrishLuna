@@ -189,7 +189,9 @@ function shapeRead (action, d, params) {
         user_id: qqOf(m.uid, m.qq ?? m.uin),
         nickname: String(m.nick ?? m.nickname ?? m.card ?? ''),
         card: String(m.card ?? ''),
-        uid: String(m.uid ?? '')
+        uid: String(m.uid ?? ''),
+        /* 禁言到期时间必须保留：丢掉它，下游筛禁言名单永远是空 */
+        shut_up_timestamp: Number(m.shutUpTime ?? m.shut_up_timestamp ?? 0) || 0
       }))
     }
     case 'get_recent_contact':
@@ -305,6 +307,16 @@ async function receiptViaHistory (groupId, md5, maxTries) {
 }
 
 async function handleAction (action, params, echo) {
+  /* OneBot 允许用 self_id 指定目标账号：专用分支不走通用 translate，
+     这里把整个请求绑定到该账号，避免「指定 B 却操作了 A」 */
+  const sid = params && params.self_id
+  if (sid !== undefined && sid !== null && String(sid) !== '') {
+    return kernel.withAccount(String(sid), () => handleActionInner(action, params, echo))
+  }
+  return handleActionInner(action, params, echo)
+}
+
+async function handleActionInner (action, params, echo) {
   const st = kernel.status()
   const base = (status, retcode, data, message) => ({ status, retcode, data, message, echo })
   /* 开发直通：默认关闭。既要挡别名 fl_eval，也要挡能直达内核调试能力的原始 action，
@@ -1251,18 +1263,34 @@ function rebuildListeners () {
   wsClients.clear()
   for (const l of listeners) { try { l.srv.close() } catch {} }
   listeners = []
-  const openOne = (kind, entry) => {
+  /* 每条监听都等 listening/error 落地再算数：端口被占用时不能报「已开启」 */
+  const openOne = (kind, entry) => new Promise((resolve) => {
     const srv = http.createServer(kind === 'wsServer'
       ? (req, res) => { res.writeHead(426, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ status: 'failed', retcode: 1406, message: '此端口只收 WebSocket 连接' })) }
       : apiRequestHandler(entry))
     srv.on('upgrade', upgradeHandler(entry))
-    srv.once('error', (e) => bus.warn('onebot', entry.name + '（端口 ' + entry.port + '）监听失败: ' + (e.code || e.message)))
-    try { srv.listen(entry.port, LISTEN_HOST) } catch {}
+    let settled = false
+    const finish = (ok, err) => {
+      if (settled) return
+      settled = true
+      resolve({ kind, name: entry.name, port: entry.port, ok, err: err || '' })
+    }
+    srv.once('error', (e) => {
+      const msg = String((e && (e.code || e.message)) || e)
+      bus.warn('onebot', entry.name + '（端口 ' + entry.port + '）监听失败: ' + msg)
+      finish(false, msg)
+    })
+    srv.once('listening', () => {
+      bus.ok('onebot', entry.name + ' 已开启 ' + (kind === 'wsServer' ? 'ws' : 'http') + '://' + LISTEN_HOST + ':' + entry.port + (entry.token ? '（有令牌）' : '（未设令牌，仅本机）'))
+      finish(true)
+    })
+    try { srv.listen(entry.port, LISTEN_HOST) } catch (e) { finish(false, String((e && e.code) || e)) }
     listeners.push({ kind, entry, srv })
-    bus.ok('onebot', entry.name + ' 已开启 ' + (kind === 'wsServer' ? 'ws' : 'http') + '://' + LISTEN_HOST + ':' + entry.port + (entry.token ? '（有令牌）' : '（未设令牌，仅本机）'))
-  }
-  for (const e of netHttpServers) if (e.enable !== false) openOne('httpServer', e)
-  for (const e of netWsServers) if (e.enable !== false) openOne('wsServer', e)
+  })
+  const jobs = []
+  for (const e of netHttpServers) if (e.enable !== false) jobs.push(openOne('httpServer', e))
+  for (const e of netWsServers) if (e.enable !== false) jobs.push(openOne('wsServer', e))
+  return Promise.all(jobs)
 }
 
 /* 反向 WS：全量重连（断旧连新，每个连接自带 5 秒重连） */
@@ -1337,12 +1365,16 @@ export async function start (opts = {}) {
   /* 启动迁移：新矩阵是空的而旧字段有值（老配置升级场景）→ 用旧字段生成矩阵 */
   /* 矩阵分支必须把统一令牌带上：normalizeNetwork 只处理连接条目、不返回 token，
      直接拿它喂 applyNet 会把已配置的统一令牌置空，专用令牌留空的条目就此免鉴权 */
-  const net = (opts.network && !netIsEmpty(opts.network))
-    ? { ...normalizeNetwork(opts.network), token: String(opts.token || '') }
+  /* 显式空矩阵（键在、数组空）代表用户主动禁用全部连接，不能再按旧字段迁移回来 */
+  const hasNetShape = !!(opts.network && typeof opts.network === 'object' &&
+    ['httpServers', 'wsServers', 'wsClients', 'httpClients'].some((k) => k in opts.network))
+  const net = (hasNetShape || (opts.network && !netIsEmpty(opts.network)))
+    ? { ...normalizeNetwork(opts.network || {}), token: String(opts.token || '') }
     : legacyToNetwork(opts)
   applyNet(net)
   running = true
-  rebuildListeners()
+  const listenResults = await rebuildListeners()
+  const listenFailed = listenResults.filter((r) => !r.ok)
   reconnectClients()
   hbTimer = setInterval(() => {
     /* self_id 是 AstrBot 的 API 路由键：连上时 uin 还没探到（发了 0），
@@ -1361,6 +1393,9 @@ export async function start (opts = {}) {
   kernel.events.on('message', onKernelMessage)
   kernel.events.on('notice', onKernelNotice)
   kernel.events.on('kernel_warning', (e) => events.emit('kernel_warning', e))
+  if (listenFailed.length) {
+    return { ok: true, httpPort, failed: listenFailed, warn: listenFailed.map((r) => r.name + '（端口 ' + r.port + '）' + r.err).join('；') }
+  }
   return { ok: true, httpPort }
 }
 
@@ -1393,8 +1428,12 @@ export async function applyConfig (opts = {}) {
     : legacyToNetwork(opts)
   if (JSON.stringify(net) === JSON.stringify(currentNet())) return { ok: true, changed: false }
   applyNet(net)
-  rebuildListeners()
+  const listenResults = await rebuildListeners()
+  const listenFailed = listenResults.filter((r) => !r.ok)
   reconnectClients()
+  if (listenFailed.length) {
+    return { ok: true, changed: true, failed: listenFailed, warn: listenFailed.map((r) => r.name + '（端口 ' + r.port + '）' + r.err).join('；') }
+  }
   return { ok: true, changed: true }
 }
 
