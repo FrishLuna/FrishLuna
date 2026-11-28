@@ -262,7 +262,17 @@
       pbU(3, 0),          /* c2cCmd */
       pbU(4, rnd),        /* msgId */
       pbU(5, seq),        /* sequence */
-      pbU(6, time)        /* timestamp */
+      pbU(6, time),       /* timestamp */
+      /* 节点头像：客户端渲染内层头像读这个字段里的 URL，
+         免签名头像接口按 uin 直取；token 字段客户端未校验留空 */
+      pbB(15, cat(
+        pbU(1, 0),
+        pbU(2, 0),
+        pbU(3, 1),
+        pbS(4, ''),
+        pbS(5, 'https://q1.qlogo.cn/g?b=qq&nk=' + fromUin + '&s=140'),
+        pbS(6, '')
+      ))
     )
 
     var elems = []
@@ -336,9 +346,12 @@
         if (u === String(selfUin())) return Promise.resolve(String(selfUid))
         var store = globalThis.__fl_uidmap || {}
         if (/^u_/.test(String(store[u] || ''))) return Promise.resolve(String(store[u]))
-        return Promise.resolve(OPS.findUid({ uin: u })).then(function (d) {
-          try { var j = JSON.parse(d); return /^u_/.test(j.uid) ? j.uid : '' } catch (e) { return '' }
-        }).catch(function () { return '' })
+        /* findUid 对查不到的号可能同步 throw（callVariants 内部穿透），一并兜住 */
+        try {
+          return Promise.resolve(OPS.findUid({ uin: u })).then(function (d) {
+            try { var j = JSON.parse(d); return /^u_/.test(j.uid) ? j.uid : '' } catch (e) { return '' }
+          }).catch(function () { return '' })
+        } catch (e) { return Promise.resolve('') }
       }
       var uidJobs = []
       for (var i = 0; i < nodes.length; i++) uidJobs.push(nodeUid(nodes[i]))
