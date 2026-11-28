@@ -250,8 +250,8 @@
 
     var head = cat(
       pbU(1, fromUin),
-      pbS(6, selfUid),
-      pbB(7, pbS(5, nickname))
+      pbS(2, String(node.uid || '')),                  /* senderUid：内层头像按它回源 */
+      pbB(7, cat(pbS(6, nickname), pbU(11, 1)))        /* senderInfo{ nick, flag } */
     )
 
     var rnd = Math.floor(Math.random() * 2147483647)
@@ -329,7 +329,22 @@
     if (!nodes.length) throw new Error('转发节点为空')
 
     return findOwnUid().then(function (selfUid) {
-      var longMsg = buildLongMsgResult(nodes, selfUid)
+      /* 每个节点先把 uin 解析成内核 uid（内层头像按它回源）：本号直接用 selfUid，
+         其余走 findUid（先查缓存），解析失败留空只影响头像不影响发送 */
+      function nodeUid (n) {
+        var u = Number(n.uin) > 0 ? String(n.uin) : String(selfUin())
+        if (u === String(selfUin())) return Promise.resolve(String(selfUid))
+        var store = globalThis.__fl_uidmap || {}
+        if (/^u_/.test(String(store[u] || ''))) return Promise.resolve(String(store[u]))
+        return Promise.resolve(OPS.findUid({ uin: u })).then(function (d) {
+          try { var j = JSON.parse(d); return /^u_/.test(j.uid) ? j.uid : '' } catch (e) { return '' }
+        }).catch(function () { return '' })
+      }
+      var uidJobs = []
+      for (var i = 0; i < nodes.length; i++) uidJobs.push(nodeUid(nodes[i]))
+      return Promise.all(uidJobs).then(function (uids) {
+        for (var i = 0; i < nodes.length; i++) nodes[i].uid = uids[i] || ''
+        var longMsg = buildLongMsgResult(nodes, selfUid)
       var payload = gzipBytes(longMsg)
       var info = cat(
         pbU(1, isGroup ? 3 : 1),
@@ -360,6 +375,7 @@
           throw e
         }
         return { resId: resId, bytes: longMsg.length, gz: payload.length }
+      })
       })
     })
   }
