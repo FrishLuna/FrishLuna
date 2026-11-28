@@ -340,7 +340,9 @@
 
     return findOwnUid().then(function (selfUid) {
       /* 每个节点先把 uin 解析成内核 uid（内层头像按它回源）：本号直接用 selfUid，
-         其余走 findUid（先查缓存），解析失败留空只影响头像不影响发送 */
+         其余走 findUid（先查缓存）。查不到必须用本号 uid 兜底：留空会让服务器判定
+         节点身份无效，把头像标记压到 1 并丢弃头像 URL，内层就变默认头像。
+         头像 URL 仍按填入的 uin 拼，所以借用身份不影响显示成谁的头像。 */
       function nodeUid (n) {
         var u = Number(n.uin) > 0 ? String(n.uin) : String(selfUin())
         if (u === String(selfUin())) return Promise.resolve(String(selfUid))
@@ -349,14 +351,14 @@
         /* findUid 对查不到的号可能同步 throw（callVariants 内部穿透），一并兜住 */
         try {
           return Promise.resolve(OPS.findUid({ uin: u })).then(function (d) {
-            try { var j = JSON.parse(d); return /^u_/.test(j.uid) ? j.uid : '' } catch (e) { return '' }
-          }).catch(function () { return '' })
-        } catch (e) { return Promise.resolve('') }
+            try { var j = JSON.parse(d); return /^u_/.test(j.uid) ? j.uid : String(selfUid) } catch (e) { return String(selfUid) }
+          }).catch(function () { return String(selfUid) })
+        } catch (e) { return Promise.resolve(String(selfUid)) }
       }
       var uidJobs = []
       for (var i = 0; i < nodes.length; i++) uidJobs.push(nodeUid(nodes[i]))
       return Promise.all(uidJobs).then(function (uids) {
-        for (var i = 0; i < nodes.length; i++) nodes[i].uid = uids[i] || ''
+        for (var i = 0; i < nodes.length; i++) nodes[i].uid = uids[i] || String(selfUid)
         var longMsg = buildLongMsgResult(nodes, selfUid)
       var payload = gzipBytes(longMsg)
       var info = cat(
