@@ -307,12 +307,11 @@ async function receiptViaHistory (groupId, md5, maxTries) {
 async function handleAction (action, params, echo) {
   const st = kernel.status()
   const base = (status, retcode, data, message) => ({ status, retcode, data, message, echo })
-  /* 开发直通：默认关闭。确实要临时 eval 时，用 FL_DEV_EVAL=1 启动面板再开；
-     非浏览器客户端没有 Origin，靠下面的跨站拦截挡住网页调用 */
-  if (action === 'fl_eval' || action === 'fl_status') {
-    if (process.env.FL_DEV_EVAL !== '1') {
-      return base('failed', 1403, null, '调试通道已关闭（需要时用 FL_DEV_EVAL=1 启动）')
-    }
+  /* 开发直通：默认关闭。既要挡别名 fl_eval，也要挡能直达内核调试能力的原始 action，
+     否则只封一个对外名字等于没封。确实要临时 eval 时用 FL_DEV_EVAL=1 启动面板 */
+  const DEV_ACTIONS = ['fl_eval', 'fl_status', 'dev_eval', 'probe_call', 'kernel_listen']
+  if (DEV_ACTIONS.includes(action) && process.env.FL_DEV_EVAL !== '1') {
+    return base('failed', 1403, null, '调试通道已关闭（需要时用 FL_DEV_EVAL=1 启动）')
   }
   if (action === 'fl_eval') {
     const r = await kernel.call('dev_eval', { js: String(params.js || '') }, 30000)

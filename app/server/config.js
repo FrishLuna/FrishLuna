@@ -72,13 +72,16 @@ export function save (patch) {
   next.blockedGroups = (next.blockedGroups || []).map((x) => String(x).trim()).filter(Boolean)
   next.port = Number(next.port) || DEFAULTS.port
   ensureDirs()
-  // 原地写：截断后覆盖，不产生额外的临时文件
-  let fd
+  /* 原子替换：先写同目录临时文件再 rename。
+     直接 open('w') 会先把旧配置截成 0 字节，写到一半失败（磁盘满 / 进程被杀）
+     就只剩空文件，下次启动回落默认值，禁发名单与连接矩阵全部丢失。 */
+  const tmp = CFG_FILE + '.tmp'
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8')
   try {
-    fd = fs.openSync(CFG_FILE, 'w')
-    fs.writeFileSync(fd, JSON.stringify(next, null, 2), 'utf8')
-  } finally {
-    if (fd !== undefined) try { fs.closeSync(fd) } catch {}
+    fs.renameSync(tmp, CFG_FILE)
+  } catch (e) {
+    try { fs.unlinkSync(tmp) } catch {}
+    throw e
   }
   cache = next
   return next

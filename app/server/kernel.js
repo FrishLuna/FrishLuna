@@ -126,6 +126,18 @@ function peerOfMessage (onebotId) {
   return { kid, peer: m.peer, type: m.chatType === 2 ? 'group' : 'private', account: m.account || '' }
 }
 
+/** 协议布尔值：OneBot 允许 true/false/1/0，查询串传进来全是字符串。
+   直接 !! 会把 'false'、'0' 当成真，把关闭操作变成开启。 */
+function boolOf (v, def = false) {
+  if (v === undefined || v === null || v === '') return def
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return v !== 0
+  const t = String(v).trim().toLowerCase()
+  if (t === 'true' || t === '1' || t === 'yes' || t === 'on') return true
+  if (t === 'false' || t === '0' || t === 'no' || t === 'off') return false
+  return def
+}
+
 function translate (action, params) {
   const p = params || {}
   switch (action) {
@@ -309,7 +321,7 @@ function translate (action, params) {
       return { name: 'devEval', args: { js: String(p.js ?? '') } }
     /* 开发期：挂内核 listener 看推送 */
     case 'kernel_listen':
-      return { name: 'kernelListen', args: { svc: p.svc, show: !!p.show } }
+      return { name: 'kernelListen', args: { svc: p.svc, show: boolOf(p.show) } }
     /* 开发期实调：验证内核方法真实签名与返回形态 */
     case 'probe_call':
       return { name: 'probeCall', args: { g: p.g, m: p.m, args: p.args } }
@@ -326,11 +338,26 @@ function translate (action, params) {
       const r = uidmap.resolve(String(p.user_id ?? ''))
       return { name: 'msgHistory', args: { type: 'private', id: r.ok ? r.uid : String(p.user_id ?? ''), count: p.count } }
     }
-    /* 精华：payload 自己用 getMsgsByMsgId 补 msgSeq/msgRandom，调用方给 群号+msgId */
+    /* 精华：标准调用只带 OneBot message_id，必须翻回内核 ID 与所属群；
+       直接把它当内核 ID 会让合法消息永远操作失败。原生 19 位 ID 要显式给群号。 */
     case 'set_essence_msg':
-      return { name: 'essenceAdd', args: { id: String(p.group_id ?? ''), msgId: String(p.message_id ?? '') } }
-    case 'delete_essence_msg':
-      return { name: 'essenceDel', args: { id: String(p.group_id ?? ''), msgId: String(p.message_id ?? '') } }
+    case 'delete_essence_msg': {
+      const fnName = action === 'set_essence_msg' ? 'essenceAdd' : 'essenceDel'
+      const rawEssenceId = String(p.message_id ?? '')
+      const essenceKid = msgid.toKernelId(p.message_id)
+      if (essenceKid !== null) {
+        const m = peerOfMessage(p.message_id)
+        if (m.type !== 'group') throw new Error('精华消息只能用于群消息')
+        if (p.group_id !== undefined && String(p.group_id) !== String(m.peer)) {
+          throw new Error(`该消息属于群 ${m.peer}，与 group_id ${p.group_id} 不一致`)
+        }
+        return { name: fnName, args: { id: m.peer, msgId: m.kid }, account: m.account }
+      }
+      if (/^\d{15,}$/.test(rawEssenceId) && p.group_id !== undefined) {
+        return { name: fnName, args: { id: String(p.group_id), msgId: rawEssenceId } }
+      }
+      throw new Error('找不到该消息 ID；请用 OneBot 返回的 message_id，或提供原生消息 ID 与 group_id')
+    }
     case 'get_essence_msg_list':
       return { name: 'essenceList', args: { id: String(p.group_id ?? '') } }
     case 'get_group_system_msg':
@@ -364,7 +391,8 @@ function translate (action, params) {
               if (qq === 'all') segs.push({ type: 'at', all: true })
               else segs.push({ type: 'at', uin: Number(qq) || 0, name: dd.name })
             } else if (t === 'face') segs.push({ type: 'face', id: Number(dd.id) || 0 })
-            else segs.push({ type: 'text', text: `[${t} 元素暂不支持出现在转发节点里]` })
+            /* 不支持的段必须如实失败：静默换成说明文字等于改动了用户要发的内容 */
+            else throw new Error(`转发节点暂不支持「${t || '未知'}」元素（当前支持 text/at/face），未发送`)
           }
         }
         return {
@@ -413,7 +441,7 @@ function translate (action, params) {
       return { name: 'aiVoiceList', args: { group: String(p.group_id ?? ''), chatType: Number(p.chat_type) || 1 } }
     case 'oidb_raw':
       /* 通用 OIDB 通道：app 侧拼包（flash.js），payload 只收发（qzone.js oidbRaw） */
-      return { name: 'oidbRaw', args: { cmd: Number(p.cmd), sub: Number(p.sub) || 0, bodyHex: String(p.body_hex ?? p.bodyHex ?? ''), uinForm: !!p.uin_form, wireName: String(p.wire_name ?? '') } }
+      return { name: 'oidbRaw', args: { cmd: Number(p.cmd), sub: Number(p.sub) || 0, bodyHex: String(p.body_hex ?? p.bodyHex ?? ''), uinForm: boolOf(p.uin_form), wireName: String(p.wire_name ?? '') } }
     case 'sso_raw':
       /* 通用裸包通道（LightAppSvc / trpc 等非 OIDB 信封命令） */
       return { name: 'ssoRaw', args: { cmd: String(p.cmd ?? ''), bodyHex: String(p.body_hex ?? p.bodyHex ?? '') } }
@@ -444,10 +472,10 @@ function translate (action, params) {
       return { name: 'groupMute', args: { id: p.group_id, uid: toMemberUid(p.user_id), seconds: p.duration } }
     case 'set_group_whole_ban':
       if (blockedHit(p)) throw new Error(`群 ${p.group_id} 在禁止发送名单内`)
-      return { name: 'groupMuteAll', args: { id: p.group_id, on: !!p.enable } }
+      return { name: 'groupMuteAll', args: { id: p.group_id, on: boolOf(p.enable) } }
     case 'set_group_kick':
       if (blockedHit(p)) throw new Error(`群 ${p.group_id} 在禁止发送名单内`)
-      return { name: 'groupKick', args: { id: p.group_id, uid: toMemberUid(p.user_id), reject: !!p.reject_add_request } }
+      return { name: 'groupKick', args: { id: p.group_id, uid: toMemberUid(p.user_id), reject: boolOf(p.reject_add_request) } }
     case 'set_group_admin':
       if (blockedHit(p)) throw new Error(`群 ${p.group_id} 在禁止发送名单内`)
       return { name: 'groupSetAdmin', args: { id: p.group_id, uid: toMemberUid(p.user_id), on: !!p.enable } }

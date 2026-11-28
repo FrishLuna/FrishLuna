@@ -116,10 +116,19 @@ function stripPrefix (rkey) {
   return rkey
 }
 
+/* 只认 QQ 自己的媒体域名：解析 hostname 再判断，不能靠字符串含 /download 就加凭据，
+   否则下载任意站点文件时会把媒体 rkey 一起送出去 */
+const RKEY_HOST = /(^|\.)(nt\.qq\.com\.cn|qpic\.cn)$/i
+
 function urlNeedsRkey (url) {
   if (!url || url.includes('rkey=')) return false
-  if (url.includes('gchat.qpic.cn')) return false
-  return url.includes('/download') || url.includes('.nt.qq.com.cn')
+  let u
+  try { u = new URL(url) } catch { return false }
+  if (u.protocol !== 'https:') return false
+  const host = u.hostname.toLowerCase()
+  if (!RKEY_HOST.test(host)) return false
+  if (/^gchat\.qpic\.cn$/i.test(host)) return false   /* 图片直链本身不带 rkey */
+  return true
 }
 
 function primaryTypeFor (url, kind, isGroup) {
