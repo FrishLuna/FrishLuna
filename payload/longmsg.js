@@ -427,7 +427,10 @@
     var rt = one(body, 1) ? rd(one(body, 1)) : {}
     var elems = rt[2] || []
     var segs = []
-    for (var i = 0; i < elems.length; i++) segs.push(decodeElem(elems[i]))
+    for (var i = 0; i < elems.length; i++) {
+      var seg = decodeElem(elems[i])
+      if (seg) segs.push(seg)   /* null = 伴生标记，不当独立段 */
+    }
     var fwd = one(head, 7) ? rd(one(head, 7)) : {}
     var nm = bytesToStr(one(fwd, 5))
     /* 服务器回执的 friendName 常被改写为空 —— 用 uin 兜底，别让卡片显示空白 */
@@ -441,22 +444,136 @@
     }
   }
 
+  /* commonElem(serviceType=48) 的 pbElem = MsgInfo：
+   *   f1 MsgInfoBody{ f1 IndexNode{f2 fileUuid, f3 storeId}, f2 PictureInfo{f1 urlPath}, f6 HashSum{f1 md5,f2 sha1} }
+   *   f2 ExtBizInfo{ f1 pic{f1 size,f2 name}, f2 video, f3 ptt, f10 busiType }
+   * businessType: 10/20 图片, 11/21 视频, 12/22 语音。
+   * 拿不到就返回空对象，绝不因某个子字段缺失整段丢掉。 */
+  function decodeMsgInfo (pbElem) {
+    var out = {}
+    if (!pbElem) return out
+    try {
+      var m = rd(pbElem)
+      var bodies = m[1] || []
+      for (var i = 0; i < bodies.length; i++) {
+        var b = rd(bodies[i])
+        var idx = one(b, 1) ? rd(one(b, 1)) : {}
+        var pic = one(b, 2) ? rd(one(b, 2)) : {}
+        var sum = one(b, 6) ? rd(one(b, 6)) : {}
+        var uuid = one(idx, 2)
+        if (uuid && uuid.length) out.file_id = bytesToStr(uuid)
+        var store = one(idx, 3)
+        if (store && store.length) out.store_id = bytesToStr(store)
+        var url = one(pic, 1)
+        if (url && url.length) out.url_path = bytesToStr(url)
+        var md5 = one(sum, 1)
+        if (md5 && md5.length) out.md5 = hexOf(md5)
+        var sha1 = one(sum, 2)
+        if (sha1 && sha1.length) out.sha1 = hexOf(sha1)
+        if (out.file_id || out.url_path || out.md5) break
+      }
+      var ext = one(m, 2) ? rd(one(m, 2)) : {}
+      var fi = one(ext, 1) ? rd(one(ext, 1)) : {}   /* pic 信息 */
+      var vi = one(ext, 2) ? rd(one(ext, 2)) : {}   /* video 信息 */
+      var ai = one(ext, 3) ? rd(one(ext, 3)) : {}   /* ptt 信息 */
+      var info = Object.keys(fi).length ? fi : (Object.keys(vi).length ? vi : ai)
+      if (firstNum(info, 1)) out.file_size = firstNum(info, 1)
+      var nm = one(info, 2)
+      if (nm && nm.length) out.file_name = bytesToStr(nm)
+      /* ExtBizInfo 里常带 "[动画表情]" 摘要 + rkey= 参数 */
+      var desc = one(ext, 1)
+      if (desc && desc.length) {
+        var s = bytesToStr(desc)
+        var mRk = /rkey=([A-Za-z0-9_\-]+)/.exec(s)
+        if (mRk) out.rkey = mRk[1]
+        if (!out.file_name && /\[动画表情\]/.test(s)) out.file_name = '动画表情'
+      }
+    } catch (e) {}
+    return out
+  }
+
+  function hexOf (arr) {
+    if (!arr) return ''
+    if (typeof Buffer !== 'undefined') return Buffer.from(arr).toString('hex')
+    var s = ''
+    for (var i = 0; i < arr.length; i++) s += ('0' + (arr[i] & 0xff).toString(16)).slice(-2)
+    return s
+  }
+
+  /* field19 videoFile：1 fileUuid, 2 fileMd5, 3 fileName, 6 fileSize, 5 fileTime, 9 thumbMd5 */
+  function decodeVideoFile (bytes) {
+    var v = rd(bytes)
+    var out = { type: 'video', data: {} }
+    var uu = one(v, 1); if (uu && uu.length) out.data.file_id = bytesToStr(uu)
+    var md5 = one(v, 2); if (md5 && md5.length) out.data.md5 = hexOf(md5)
+    var nm = one(v, 3); if (nm && nm.length) out.data.file = bytesToStr(nm)
+    if (firstNum(v, 6)) out.data.file_size = firstNum(v, 6)
+    if (firstNum(v, 5)) out.data.duration = firstNum(v, 5)
+    out.text = '[视频]'
+    return out
+  }
+
   function decodeElem (bytes) {
     var e = rd(bytes)
     if (e[1]) {
       var t = rd(e[1][0])
-      return { type: 'text', text: bytesToStr(one(t, 1)) }
+      return { type: 'text', data: { text: bytesToStr(one(t, 1)) }, text: bytesToStr(one(t, 1)) }
     }
     if (e[2]) {
       var f = rd(e[2][0])
-      return { type: 'face', id: firstNum(f, 1) }
+      var id = firstNum(f, 1)
+      return { type: 'face', data: { id: String(id) }, text: '[表情]' }
     }
-    if (e[4]) return { type: 'image' }
-    if (e[8]) return { type: 'xml' }
-    if (e[13]) return { type: 'reply' }
-    if (e[14]) return { type: 'json' }
-    if (e[15]) return { type: 'common' }
-    return { type: 'unknown' }
+    /* 图片：4 notOnlineImage(C2C), 8 customFace(群) */
+    if (e[4] || e[8]) {
+      var img = rd((e[4] || e[8])[0])
+      var md5 = one(img, e[4] ? 7 : 13)
+      return { type: 'image', data: { md5: md5 ? hexOf(md5) : '' }, text: '[图片]' }
+    }
+    /* 视频：19 videoFile(旧裸包) */
+    if (e[19]) return decodeVideoFile(e[19][0])
+    /* 商城/动画表情：6 marketFace */
+    if (e[6]) {
+      var mf = rd(e[6][0])
+      var fid = one(mf, 4)
+      return { type: 'image', data: { emoji_id: fid ? hexOf(fid) : '', emoji_key: bytesToStr(one(mf, 7) || '') }, text: '[表情]' }
+    }
+    /* 富文本/嵌套：12 richMsg */
+    if (e[12]) {
+      var rm = rd(e[12][0])
+      return { type: 'forward', data: { service_id: firstNum(rm, 2) }, text: '[聊天记录]' }
+    }
+    if (e[13]) return { type: 'reply', data: {}, text: '' }
+    /* 51 lightApp(JSON 卡片) */
+    if (e[51]) {
+      var la = rd(e[51][0])
+      var json = bytesToStr(one(la, 1) || '')
+      return { type: 'json', data: { data: json }, text: '[卡片]' }
+    }
+    if (e[14]) return { type: 'json', data: { data: bytesToStr(e[14][0]) }, text: '[卡片]' }
+    if (e[53]) {
+      var ce = rd(e[53][0])
+      var svc = firstNum(ce, 1)
+      var biz = firstNum(ce, 3)
+      var info = decodeMsgInfo(one(ce, 2))
+      if (svc === 48) {
+        if (biz === 21 || biz === 11) {
+          return { type: 'video', data: info, text: '[视频]' }
+        }
+        if (biz === 22 || biz === 12) {
+          return { type: 'record', data: info, text: '[语音]' }
+        }
+        /* 10/20 图片（含动画表情） */
+        return { type: 'image', data: info, text: '[图片]' }
+      }
+      if (svc === 3) return { type: 'image', data: Object.assign({ flash: true }, info), text: '[闪照]' }
+      if (svc === 2) return { type: 'poke', data: { type: String(biz) }, text: '[戳一戳]' }
+      if (svc === 33 || svc === 37) return { type: 'face', data: {}, text: '[表情]' }
+      return { type: 'image', data: info, text: '[图片]' }
+    }
+    /* 37 generalFlags 是伴生标记、9 常为空占位：返回 null 让调用方跳过 */
+    if (e[37] || e[9]) return null
+    return { type: 'unknown', data: {}, text: '[元素]' }
   }
 
   /**
