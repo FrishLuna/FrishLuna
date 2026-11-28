@@ -886,6 +886,7 @@
 
     return OPS.forwardUpload({ type: isGroup ? 'group' : 'private', peer: peer, nodes: nodes }).then(function (up) {
       var meta = nodeSummary(nodes)
+      if (a.title) { meta.source = String(a.title); meta.prompt = '[' + a.title + ']' }
       var bubble = {
         isGroup: isGroup,
         peer: isGroup ? peer : (a.peerUid || peer),

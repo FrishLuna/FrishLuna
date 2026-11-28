@@ -414,7 +414,8 @@ function translate (action, params) {
           type: isGroup ? 'group' : 'private',
           peer: isGroup ? String(p.group_id ?? '') : String(p.user_id ?? ''),
           peerUid: isGroup ? '' : (peerObj.peerUid || ''),
-          nodes
+          nodes,
+          title: p.title
         }
       }
     }
