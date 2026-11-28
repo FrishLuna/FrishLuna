@@ -572,6 +572,101 @@
     return { tSum: tSum, source: source, summary: '查看' + tSum + '条转发消息', prompt: '[聊天记录]', news: news }
   }
 
+  /* ============ 原生合并转发气泡：richMsg(serviceId=35) 走 PbSendMsg ============
+   * arkElement(10) 塞 com.tencent.multimsg 只是「ark 卡片」，PC QQ 不认这个模板 →
+   * 显示「暂不支持该消息类型」。QQ 原生合并转发气泡是
+   * Elem.richMsg(field 12){ template1: 0x01+zlib.deflate(XML viewMultiMsg), serviceId:35 }，
+   * 由 MessageSvc.PbSendMsg 裸包发出（media.sendRawElems，与图片/视频同通道）。
+   * 实测：服务端接受，落库 elementType=16（原生 multiForwardMsgElement），全平台可点开。 */
+  function xe (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  }
+  function viField (f, n) { return tagOf(f, 0).concat(vi(n)) }
+  function richMsgBubbleElem (resId, meta) {
+    if (!zlib || typeof zlib.deflateSync !== 'function') throw new Error('缺少压缩组件，无法构造转发气泡')
+    var uniseq = uuid()
+    var titles = (meta.news || []).map(function (n) {
+      return '<title color="#777777" size="26">' + xe(n.text || '') + '</title>'
+    }).join('')
+    var src = xe(meta.source || '聊天记录')
+    var xml =
+      "<?xml version='1.0' encoding='UTF-8' standalone='yes'?> " +
+      '<msg serviceID="35" templateID="1" action="viewMultiMsg"' +
+      ' brief="' + xe(meta.prompt || '[聊天记录]') + '"' +
+      ' m_fileName="' + xe(uniseq) + '"' +
+      ' m_resid="' + xe(resId) + '"' +
+      ' tSum="' + (Number(meta.tSum) || 1) + '" flag="3">' +
+      '<item layout="1"> <title color="#000000" size="34">' + src + '</title>' +
+      titles +
+      ' <hr></hr> <summary color="#808080">' + xe(meta.summary || '查看转发消息') + '</summary>' +
+      '</item> <source name="' + src + '"></source> </msg>'
+    var def = zlib.deflateSync(Buffer.from(xml, 'utf8'))
+    var payload = [1].concat(toBytes(def))
+    var richMsg = cat(pbB(1, payload), viField(2, 35))
+    return { elem: pbB(12, richMsg), uniseq: uniseq }
+  }
+
+  /* 原生气泡发送：构造 richMsg35 elem → 基线快照 → PbSendMsg → 轮询 diff 拿自己新发的 msgId。
+     PbSendMsg 回执早于写库，必须轮询（实测首查落库未完成，msgId 恒 null）。 */
+  function nativeBubbleSend (o) {
+    var media = globalThis.__fl_media
+    if (!media || typeof media.sendRawElems !== 'function') {
+      return Promise.reject(new Error('原生通道未就绪：请重载 media.js'))
+    }
+    var s = needSession()
+    var ms = s.getMsgService()
+    var peerQuery = { chatType: o.isGroup ? 2 : 1, peerUid: String(o.peer), guildId: '' }
+    var built = richMsgBubbleElem(o.resId, o)
+    var beforeIds = null
+    return Promise.resolve(ms.getLatestDbMsgs(peerQuery, 10)).then(function (r) {
+      beforeIds = {}
+      var arr = (r && r.msgList) || []
+      for (var i = 0; i < arr.length; i++) beforeIds[String(arr[i].msgId)] = 1
+      return null
+    }).catch(function () { beforeIds = null; return null }).then(function () {
+      return media.sendRawElems({
+        type: o.isGroup ? 'group' : 'private',
+        id: o.peer,
+        peerUid: o.isGroup ? '' : o.peer,
+        elems: [built.elem]
+      })
+    }).then(function () {
+      return new Promise(function (resolve) {
+        var me = selfUin()
+        var tries = 0
+        var done = false
+        function finish (id) { if (done) return; done = true; resolve({ msgId: id, uniseq: built.uniseq }) }
+        function poll () {
+          if (done) return
+          tries++
+          try {
+            Promise.resolve(ms.getLatestDbMsgs(peerQuery, 10)).then(function (r) {
+              var arr = (r && r.msgList) || []
+              var found = null
+              for (var i = 0; i < arr.length; i++) {
+                var m = arr[i]
+                if (beforeIds && beforeIds[String(m.msgId)]) continue
+                var mine = (me > 0 && Number(m.senderUin) === Number(me)) || Number(m.sendType) === 1
+                if (!mine) continue
+                if (m.peerUid && peerQuery.peerUid && String(m.peerUid) !== String(peerQuery.peerUid)) continue
+                var els = m.elements || []
+                for (var k = 0; k < els.length; k++) {
+                  if (Number(els[k].elementType) === 16) { found = m; break }
+                }
+                if (found) break
+              }
+              if (found) finish(String(found.msgId))
+              else if (tries >= 15) finish(null)
+              else setTimeout(poll, 400)
+            }, function () { if (tries >= 15) finish(null); else setTimeout(poll, 400) })
+          } catch (e) { if (tries >= 15) finish(null); else setTimeout(poll, 400) }
+        }
+        poll()
+      })
+    })
+  }
+
   /* 发卡片：sendMsg + arkElement(10)。发完在最近 DB 消息里按 uniseq 找回自己的 msgId。
      o.json 直接给卡片 JSON 时走通用卡片通道（B1：send_msg json 段 / 图文卡），
      否则按 multimsg 模板组包。 */
@@ -674,7 +769,7 @@
 
     return OPS.forwardUpload({ type: isGroup ? 'group' : 'private', peer: peer, nodes: nodes }).then(function (up) {
       var meta = nodeSummary(nodes)
-      return arkSend({
+      var bubble = {
         isGroup: isGroup,
         peer: isGroup ? peer : (a.peerUid || peer),
         resId: up.resId,
@@ -683,14 +778,24 @@
         prompt: meta.prompt,
         news: meta.news,
         tSum: meta.tSum
-      }).then(function (sent) {
+      }
+      /* 默认走原生 richMsg35（PC/手机都能点开）；nativeBubble:false 或通道异常时回退 ark 卡片。 */
+      var useNative = a.nativeBubble !== false
+      var sentP = useNative
+        ? nativeBubbleSend(bubble).catch(function (e) {
+          globalThis.__fl_emit && globalThis.__fl_emit(JSON.stringify({ evt: 'forwardBubbleFallback', err: String(e && e.message || e) }))
+          return arkSend(bubble)
+        })
+        : arkSend(bubble)
+      return sentP.then(function (sent) {
         return {
           resId: up.resId,
           msgId: sent.msgId,
           /* OneBot 层认 message_id 字段名（send_* 分支自动注册进 int32 映射表） */
           message_id: sent.msgId,
           uniseq: sent.uniseq,
-          count: nodes.length
+          count: nodes.length,
+          bubble: useNative ? 'native' : 'ark'
         }
       })
     })

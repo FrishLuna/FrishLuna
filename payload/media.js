@@ -1374,6 +1374,23 @@
     })
   }
 
+  /* 裸元素发送口：给需要原生元素（如合并转发 richMsg35）的协议层用。
+     elems 是已经编好的 elem 字节数组（每个单独一个 field 2），走和图片/视频同一条
+     MessageSvc.PbSendMsg 通道。别用内核 sendMsg —— 那套对富元素有白名单。 */
+  API.sendRawElems = function (a) {
+    a = a || {}
+    var elems = Array.isArray(a.elems) ? a.elems : (a.elem ? [a.elem] : [])
+    if (!elems.length) return Promise.reject(new Error('元素为空'))
+    return sendMsgProto({
+      isGroup: a.type === 'group',
+      groupCode: a.id,
+      uin: a.uin || (a.type === 'group' ? 0 : a.id),
+      uid: a.type === 'group' ? '' : (a.peerUid || ''),
+      elems: elems,
+      clientSeq: Number(a.clientSeq || 0)
+    })
+  }
+
   API.imageSize = imageSize
   /* 诊断口：单独跑一次上传申请，看服务端回了什么（面板无入口） */
   API.debugApply = applyUpload
